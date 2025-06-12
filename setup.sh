@@ -12,7 +12,7 @@ NOTEBOOK_CONTAINER="bdist-workspace-notebook-1"
 
 NEW_DB_USER="postgres"
 NEW_DB_PASS="postgres"
-NEW_DB_NAME="Aviacao"
+NEW_DB_NAME="aviacao"
 SCHEMA_PATH="./data/aviacao.sql"
 
 cd bdist-workspace
@@ -65,6 +65,11 @@ CREATE DATABASE $NEW_DB_NAME OWNER $NEW_DB_USER;
 docker exec -i $NOTEBOOK_CONTAINER bash -c "
 export PGPASSWORD='$NEW_DB_PASS'
 psql -h $DB_HOST -U $NEW_DB_USER -d $NEW_DB_NAME -w -f /home/jovyan/data/aviacao.sql
+"
+
+docker exec -it bdist-workspace-notebook-1 bash -c "
+export PGPASSWORD='postgres'
+psql -h postgres -U postgres -d postgres -c '\l'
 "
 
 echo "Database '$NEW_DB_NAME' created and schema imported."
