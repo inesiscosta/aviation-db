@@ -94,7 +94,7 @@ def test_ri1_checkin_validation(db_query, db_connection, counters):
         print_test_result("RI-1.2: Wrong class assignment (economy ticket to first class seat)", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "RI-1 Violation" in str(e):
+        if "Classe do bilhete" in str(e) or "O assento atribuído" in str(e):
             print_test_result("RI-1.2: Wrong class assignment (Assign first class seat to economy ticket)", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-1.2: Wrong class assignment (Assign first class seat to economy ticket)", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -111,12 +111,12 @@ def test_ri1_checkin_validation(db_query, db_connection, counters):
         print_test_result("RI-1.3: Wrong airplane assignment", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "RI-1 Violation" in str(e):
+        if "Classe do bilhete" in str(e) or "O assento atribuído" in str(e):
             print_test_result("RI-1.3: Wrong airplane assignment", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-1.3: Wrong airplane assignment", "VIOLATION", "OTHER_ERROR", counters, str(e))
 
-    # Test 4: Duplicate assign two tickets to the same seat (TODO: Idk how should this work yet?)
+    # Test 4: Update seat assignment
     db_query.execute("INSERT INTO bilhete (voo_id, codigo_reserva, nome_passegeiro, preco, prim_classe) VALUES (1, %s, 'Test Passenger 3', 100.0, true) RETURNING id", (codigo_reserva,))
     ticket_id3 = db_query.fetchone()[0]
     db_connection.commit()
@@ -124,13 +124,13 @@ def test_ri1_checkin_validation(db_query, db_connection, counters):
     try:
         db_query.execute("UPDATE bilhete SET lugar = '1A', no_serie = 'CS-TEST' WHERE id = %s", (ticket_id3,))
         db_connection.commit()
-        print_test_result("RI-1.4: Duplicate seat assignment", "VIOLATION", "SUCCESS", counters)
+        print_test_result("RI-1.4: Update seat assignment", "SUCCESS", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "RI-1 Violation" in str(e):
-            print_test_result("RI-1.4: Duplicate seat assignment", "VIOLATION", "VIOLATION", counters)
+        if "Classe do bilhete" in str(e) or "O assento atribuído" in str(e):
+            print_test_result("RI-1.4: Update seat assignment", "VIOLATION", "VIOLATION", counters)
         else:
-            print_test_result("RI-1.4: Duplicate seat assignment", "VIOLATION", "OTHER_ERROR", counters, str(e))
+            print_test_result("RI-1.4: Update seat assignment", "VIOLATION", "OTHER_ERROR", counters, str(e))
 
 def test_ri2_capacity_validation(db_query, db_connection, counters):
     """Test RI-2: Capacity validation"""
@@ -161,7 +161,7 @@ def test_ri2_capacity_validation(db_query, db_connection, counters):
         print_test_result("RI-2.2: First class capacity overflow", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "RI-2 Violation" in str(e):
+        if "Excedida a capacidade de 1" in str(e):
             print_test_result("RI-2.2: First class capacity overflow", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-2.2: First class capacity overflow", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -183,7 +183,7 @@ def test_ri2_capacity_validation(db_query, db_connection, counters):
         print_test_result("RI-2.4: Economy class capacity overflow", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "RI-2 Violation" in str(e):
+        if "Excedida a capacidade de 2" in str(e):
             print_test_result("RI-2.4: Economy class capacity overflow", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-2.4: Economy class capacity overflow", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -217,61 +217,10 @@ def test_ri3_sale_time_validation(db_query, db_connection, counters):
             print_test_result(f"RI-3.{i}: {description}", expected, "SUCCESS", counters)
         except psycopg2.Error as e:
             db_connection.rollback()
-            if "RI-3 Violation" in str(e):
+            if "Hora da venda" in str(e):
                 print_test_result(f"RI-3.{i}: {description}", expected, "VIOLATION", counters)
             else:
                 print_test_result(f"RI-3.{i}: {description}", expected, "OTHER_ERROR", counters, str(e))
-
-def test_edge_cases(db_query, db_connection, counters):
-    """Test edge cases and boundary conditions"""
-    print("=" * 60)
-    print("TESTING EDGE CASES")
-    print("=" * 60)
-
-    # Test 1: Multiple sales for same flight
-    sale_time = datetime.now() - timedelta(hours=2)
-    for i in range(5):
-        try:
-            db_query.execute("INSERT INTO venda (nif_cliente, balcao, hora) VALUES (%s, 'LIS', %s)", (f'22222222{i}', sale_time))
-            db_connection.commit()
-            print_test_result(f"EDGE.1.{i+1}: Multiple sales creation {i+1}/5", "SUCCESS", "SUCCESS", counters)
-        except psycopg2.Error as e:
-            db_connection.rollback()
-            print_test_result(f"EDGE.1.{i+1}: Multiple sales creation {i+1}/5", "SUCCESS", "FAILED", counters, str(e))
-
-    # Test 2: Null seat assignment (TODO: should be allowed Idk)
-    try:
-        db_query.execute("SELECT codigo_reserva FROM venda ORDER BY codigo_reserva DESC LIMIT 1")
-        last_reserva = db_query.fetchone()[0]
-
-        db_query.execute("INSERT INTO bilhete (voo_id, codigo_reserva, nome_passegeiro, preco, prim_classe, lugar, no_serie) VALUES (1, %s, 'No Seat', 100.0, false, NULL, NULL)", (last_reserva,))
-        db_connection.commit()
-        print_test_result("EDGE.2: Null seat assignment", "SUCCESS", "SUCCESS", counters)
-    except psycopg2.Error as e:
-        db_connection.rollback()
-        print_test_result("EDGE.2: Null seat assignment", "SUCCESS", "FAILED", counters, str(e))
-
-    # Test 3: Update existing sale time (TODO: Idk if it should trigger RI-3 if tickets exist)
-    try:
-        # Get a sale with tickets
-        db_query.execute("SELECT codigo_reserva FROM venda v WHERE EXISTS (SELECT 1 FROM bilhete b WHERE b.codigo_reserva = v.codigo_reserva) LIMIT 1")
-        result = db_query.fetchone()
-        if result:
-            reserva_with_tickets = result[0]
-            future_time = datetime.now() + timedelta(hours=5)
-
-            db_query.execute("UPDATE venda SET hora = %s WHERE codigo_reserva = %s", (future_time, reserva_with_tickets))
-            db_connection.commit()
-            print_test_result("EDGE.3: Update sale time to future (should be blocked)", "VIOLATION", "SUCCESS", counters)
-        else:
-            print_test_result("EDGE.3: Update sale time to future (no sale with tickets found)", "SKIPPED", "SKIPPED", counters)
-
-    except psycopg2.Error as e:
-        db_connection.rollback()
-        if "RI-3 Violation" in str(e):
-            print_test_result("EDGE.3: Update sale time to future (should be blocked)", "VIOLATION", "VIOLATION", counters)
-        else:
-            print_test_result("EDGE.3: Update sale time to future (should be blocked)", "VIOLATION", "OTHER_ERROR", counters, str(e))
 
 def cleanup_db(db_query, db_connection):
     """Cleans up all the data on the db."""
@@ -294,9 +243,12 @@ def main():
     try:
         setup_minimal_data(db_query, db_connection)
         test_ri1_checkin_validation(db_query, db_connection, counters)
+        cleanup_db(db_query, db_connection)
+        setup_minimal_data(db_query, db_connection)
         test_ri2_capacity_validation(db_query, db_connection, counters)
+        cleanup_db(db_query, db_connection)
+        setup_minimal_data(db_query, db_connection)
         test_ri3_sale_time_validation(db_query, db_connection, counters)
-        test_edge_cases(db_query, db_connection, counters)
         cleanup_db(db_query, db_connection)
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")

@@ -63,78 +63,70 @@ CREATE TABLE bilhete (
 
 ------------------------JUPYTER CENAS------------------------------
 
--- RI-1: Classe do bilhete = classe do assento E avião do assento = avião do voo
-CREATE OR REPLACE FUNCTION checkin_ri1()
+-- RI-1: Garante que, ao fazer check-in (atribuição de assento), a classe do bilhete corresponde à classe do assento e o avião do assento corresponde ao avião do voo
+CREATE OR REPLACE FUNCTION validate_checkin()
 RETURNS TRIGGER AS $$
 DECLARE
     assento_classe BOOLEAN;
     voo_serie VARCHAR(80);
 BEGIN
-    -- Verifica se lugar e no_serie estão a ser definidos (check-in)
+    -- Verifica se lugar e no_serie estão definidos na operação de (check-in)
     IF NEW.lugar IS NOT NULL AND NEW.no_serie IS NOT NULL THEN
         -- Classe do bilhete = classe do assento
         SELECT prim_classe INTO assento_classe
         FROM assento
         WHERE lugar = NEW.lugar AND no_serie = NEW.no_serie;
         IF assento_classe IS NULL OR assento_classe <> NEW.prim_classe THEN
-            RAISE EXCEPTION 'Classe do bilhete não corresponde à classe do assento';
+            RAISE EXCEPTION 'Classe do bilhete (%) não corresponde à do lugar (%) atribuído.', NEW.prim_classe, assento_classe;
         END IF;
         -- Avião do assento = avião do voo
         SELECT no_serie INTO voo_serie FROM voo WHERE id = NEW.voo_id;
         IF voo_serie IS NULL OR voo_serie <> NEW.no_serie THEN
-            RAISE EXCEPTION 'Avião do assento não corresponde ao avião do voo';
+            RAISE EXCEPTION 'O assento atribuído (lugar: %, avião: %) não pertence ao avião (%) que realiza o voo (voo_id: %).', NEW.lugar, NEW.no_serie, voo_serie, NEW.voo_id;
         END IF;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_checkin_ri1
+CREATE OR REPLACE TRIGGER trg_validate_checkin
 BEFORE INSERT OR UPDATE OF lugar, no_serie ON bilhete
 FOR EACH ROW
-EXECUTE FUNCTION checkin_ri1();
+EXECUTE FUNCTION validate_checkin();
 
--- RI-2: Nº bilhetes vendidos por classe ≤ nº assentos disponíveis por classe no avião do voo
-CREATE OR REPLACE FUNCTION venda_ri2()
+-- RI-1: Garante que, ao fazer check-in (atribuição de assento), a classe do bilhete corresponde à classe do assento e o avião do assento corresponde ao avião do voo
+CREATE OR REPLACE FUNCTION validate_checkin()
 RETURNS TRIGGER AS $$
 DECLARE
-    bilhetes_1c INT;
-    bilhetes_2c INT;
-    assentos_1c INT;
-    assentos_2c INT;
-    serie VARCHAR(80);
+    assento_classe BOOLEAN;
+    voo_serie VARCHAR(80);
 BEGIN
-    -- Só verifica em inserção de bilhete
-    SELECT no_serie INTO serie FROM voo WHERE id = NEW.voo_id;
-    -- Bilhetes já vendidos para este voo
-    SELECT COUNT(*) INTO bilhetes_1c FROM bilhete WHERE voo_id = NEW.voo_id AND prim_classe = TRUE;
-    SELECT COUNT(*) INTO bilhetes_2c FROM bilhete WHERE voo_id = NEW.voo_id AND prim_classe = FALSE;
-    -- Assentos disponíveis por classe no avião
-    SELECT COUNT(*) INTO assentos_1c FROM assento WHERE no_serie = serie AND prim_classe = TRUE;
-    SELECT COUNT(*) INTO assentos_2c FROM assento WHERE no_serie = serie AND prim_classe = FALSE;
-    -- Considera o novo bilhete
-    IF NEW.prim_classe THEN
-        bilhetes_1c := bilhetes_1c + 1;
-    ELSE
-        bilhetes_2c := bilhetes_2c + 1;
-    END IF;
-    IF bilhetes_1c > assentos_1c THEN
-        RAISE EXCEPTION 'Excedida a capacidade de 1ª classe para este voo'; -- Pass flight id in error message.
-    END IF;
-    IF bilhetes_2c > assentos_2c THEN
-        RAISE EXCEPTION 'Excedida a capacidade de 2ª classe para este voo';
+    -- Verifica se lugar e no_serie estão definidos na operação de (check-in)
+    IF NEW.lugar IS NOT NULL AND NEW.no_serie IS NOT NULL THEN
+        -- Classe do bilhete = classe do assento
+        SELECT prim_classe INTO assento_classe
+        FROM assento
+        WHERE lugar = NEW.lugar AND no_serie = NEW.no_serie;
+        IF assento_classe IS NULL OR assento_classe <> NEW.prim_classe THEN
+            RAISE EXCEPTION 'Classe do bilhete (%) não corresponde à do lugar (%) atribuído.', NEW.prim_classe, assento_classe;
+        END IF;
+        -- Avião do assento = avião do voo
+        SELECT no_serie INTO voo_serie FROM voo WHERE id = NEW.voo_id;
+        IF voo_serie IS NULL OR voo_serie <> NEW.no_serie THEN
+            RAISE EXCEPTION 'O assento atribuído (lugar: %, avião: %) não pertence ao avião (%) que realiza o voo (voo_id: %).', NEW.lugar, NEW.no_serie, voo_serie, NEW.voo_id;
+        END IF;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_venda_ri2
-BEFORE INSERT OR UPDATE OF prim_classe ON bilhete
+CREATE OR REPLACE TRIGGER trg_validate_checkin
+BEFORE INSERT OR UPDATE OF lugar, no_serie ON bilhete
 FOR EACH ROW
-EXECUTE FUNCTION venda_ri2();
+EXECUTE FUNCTION validate_checkin();
 
--- RI-3: Hora da venda < hora de partida de todos os voos dos bilhetes da venda
-CREATE OR REPLACE FUNCTION venda_ri3()
+-- RI-3: Garante que a hora da venda é anterior à hora de partida de todos os voos associados aos bilhetes dessa venda
+CREATE OR REPLACE FUNCTION validate_sale_time()
 RETURNS TRIGGER AS $$
 DECLARE
     venda_hora TIMESTAMP;
@@ -145,13 +137,13 @@ BEGIN
     -- Hora de partida do voo deste bilhete
     SELECT hora_partida INTO partida FROM voo WHERE id = NEW.voo_id;
     IF venda_hora IS NOT NULL AND partida IS NOT NULL AND venda_hora >= partida THEN
-        RAISE EXCEPTION 'Hora da venda não pode ser posterior ou igual à hora de partida do voo'; -- TODO: More descriptive error messages.
+        RAISE EXCEPTION 'Hora da venda % não pode ser posterior ou igual à hora de partida do voo (id: %, partida: %).', venda_hora, NEW.voo_id, partida;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_venda_ri3
+CREATE OR REPLACE TRIGGER trg_validate_sale_time
 BEFORE INSERT ON bilhete
 FOR EACH ROW
-EXECUTE FUNCTION venda_ri3();
+EXECUTE FUNCTION validate_sale_time();
