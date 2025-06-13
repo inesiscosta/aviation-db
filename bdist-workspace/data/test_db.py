@@ -273,6 +273,13 @@ def test_edge_cases(db_query, db_connection, counters):
         else:
             print_test_result("EDGE.3: Update sale time to future (should be blocked)", "VIOLATION", "OTHER_ERROR", counters, str(e))
 
+def cleanup_db(db_query, db_connection):
+    """Cleans up all the data on the db."""
+    print("Cleaning up test data...")
+    db_query.execute("TRUNCATE TABLE bilhete, venda, voo, assento, aviao, aeroporto RESTART IDENTITY CASCADE")
+    db_connection.commit()
+    print("✓ Database cleanup complete\n")
+
 def main():
     """Run all integrity constraint tests"""
     print("AVIACAO DATABASE INTEGRITY CONSTRAINT TESTING")
@@ -290,11 +297,7 @@ def main():
         test_ri2_capacity_validation(db_query, db_connection, counters)
         test_ri3_sale_time_validation(db_query, db_connection, counters)
         test_edge_cases(db_query, db_connection, counters)
-        # Clean up database after tests
-        print("Cleaning up test data...")
-        db_query.execute("TRUNCATE TABLE bilhete, venda, voo, assento, aviao, aeroporto RESTART IDENTITY CASCADE")
-        db_connection.commit()
-        print("✓ Database cleanup complete\n")
+        cleanup_db(db_query, db_connection)
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
         counters['failed'] += 1
