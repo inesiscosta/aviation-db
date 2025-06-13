@@ -1,15 +1,58 @@
-import random
-import names
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+import names
+import random
 
-# Airports in Europe
-# Format: (IATA code, name, city, country)
-# Cities with multiple airports:
-#   - Istanbul (2 airports),
-#   - London (3 airports)
-#   - Milan (2 airports),
-#   - Paris (2 airports),
-airports = [
+@dataclass
+class Airport:
+    iata_code: str
+    name: str
+    city: str
+    country: str
+
+@dataclass
+class Airplane:
+    serial_no: str
+    model: str
+    total_seats: int
+    seats: list['Seat'] = field(default_factory=list)
+
+@dataclass
+class Model:
+    name: str
+    total_seats: int
+
+@dataclass
+class Seat:
+    id: str
+    first_class: bool
+    airplane: 'Airplane'
+
+@dataclass
+class Flight:
+    airplane: Airplane
+    departure_airport: Airport
+    departure_datetime: datetime
+    arrival_airport: Airport
+    arrival_datetime: datetime
+
+@dataclass
+class Sale:
+    retail_counter: Airport
+    nif: str
+    datetime: datetime
+
+@dataclass
+class Ticket:
+    flight: Flight
+    sale: Sale
+    name: str
+    price: float
+    seat: Seat
+    first_class: bool
+
+# Airports
+airports_data = [
     ('VIE', 'Vienna Intl', 'Vienna', 'Austria'),
     ('PRG', 'Václav Havel', 'Prague', 'Czech Republic'),
     ('CPH', 'Kastrup', 'Copenhagen', 'Denmark'),
@@ -31,224 +74,247 @@ airports = [
     ('LHR', 'Heathrow', 'London', 'United Kingdom'),
     ('STN', 'Stansted', 'London', 'United Kingdom'),
 ]
+# Create Airport objects using the provided data
+airports = [Airport(*data) for data in airports_data]
 
-airport_dict = {airport[0]: airport for airport in airports}
-
-# Common Airplane Models for European Routes:
-# Format: (Model Name, Total Seats)
+# Airplane models
 models = [
-    ('A220-300', 145),
-    ('B737-800', 160),
-    ('A320', 186),
-    ('B737 MAX 8', 189),
-    ('A321', 244),
-    ('B787-8', 242),
+    Model('A220-300', 145),
+    Model('B737-800', 160),
+    Model('A320', 186),
+    Model('B737 MAX 8', 189),
+    Model('A321', 244),
+    Model('B787-8', 242),
 ]
 
-# Array of Country Prefixes
+# Country prefixes for serial numbers
 country_prefixes = ['CS', 'D', 'G', 'F', 'I', 'OE', 'EC', 'PH', 'HB']
 
-def generate_no_serie(model_name):
-    """Generates a unique serial number based on the model name."""
+# Generate serial numbers for airplanes
+# Format: <country_prefix>-<manufacturer_letter><number>
+def generate_serial_number(model_name):
+    # Randomly select a country prefix for this serial number
     country_prefix = random.choice(country_prefixes)
+    # The first letter of the model name is used as the manufacturer letter (as per real-world practice)
     manufacturer_letter = model_name[0]
+    # Generate a random 4-digit number
     number = random.randint(1000, 9999)
+    # Combine to form the serial number
     return f'{country_prefix}-{manufacturer_letter}{number}'
 
-def generate_airplanes():
-    """Generates a list of airplanes with unique serial numbers."""
-    airplanes = []
-    used_serials = set()
-    for i in range(20):
-        model = models[i % len(models)]
-        no_serie = generate_no_serie(model[0])
-        while no_serie in used_serials:
-            no_serie = generate_no_serie(model[0])
-        used_serials.add(no_serie)
-        airplanes.append((no_serie, model[0], model[1]))
-    return airplanes
+# Generate a list of 20 airplanes with unique serial numbers
+airplanes = []
+# Track serial numbers to ensure uniqueness
+used_serials = set()
+# Track used models to ensure all models are used at least once
+used_models = set()
+# Generate 20 airplanes
+for i in range(20):
+    # Randomly select a model for this airplane and mark it as used
+    model = random.choice(models)
+    used_models.add(model.name)
+    # Generate a serial number for this airplane
+    serial_no = generate_serial_number(model.name)
+    # If the serial number is already used, generate a new one until it's unique
+    while serial_no in used_serials:
+        serial_no = generate_serial_number(model.name)
+    # Mark this serial number as used
+    used_serials.add(serial_no)
+    # Create and save this Airplane
+    airplanes.append(Airplane(serial_no, model.name, model.total_seats))
 
-# Airplanes: 25 airplanes with unique serial numbers
-# Format: (no_serie, model, total_seats)
-airplanes = generate_airplanes()
-airplanes_dict = {airplane[0]: airplane for airplane in airplanes}
+# Validate that all models are used at least once
+print(f"All models used: {all(model.name in used_models for model in models)}")
 
-# Seats per airplane
-# Format: (no_serie, model, total_seats)
-def generate_seats(no_serie, total_seats):
-    """Generate seats with ~10% first class using index math."""
+# Generate seats for each airplane based on airplane capacity
+seat_letters = 'ABCDEF' # Assuming a maximum of 6 seats per row (normally 3 on each side of the aisle)
+seats_per_row = len(seat_letters) # 6
+for airplane in airplanes:
     seats = []
-    seat_letters = 'ABCDEF'
-    seats_per_row = len(seat_letters) # 6 seats per row (A-F)
-
-    total_rows = (total_seats + seats_per_row - 1) // seats_per_row  # ceiling division
+    # Ceiling the total number of rows based on the total seats and seats per row.
+    total_rows = (airplane.total_seats + seats_per_row - 1) // seats_per_row
+    # Calculate the number of first class rows (10% of total rows, rounded down)
     first_class_rows = int(total_rows * 0.1)
+    for i in range(airplane.total_seats):
+        # Calculate the row number
+        row_number = i // seats_per_row + 1
+        # Calculate indice of the seat letter
+        col_letter = seat_letters[i % seats_per_row]
+        id = f"{row_number}{col_letter}"
+        # Determine if this seat is first class (first 10% of rows)
+        is_first_class_seat = row_number <= first_class_rows
+        # Create and save the Seat
+        seats.append(Seat(id, is_first_class_seat, airplane))
+    # Save to each plane a list of its seats
+    airplane.seats = seats
 
-    for i in range(total_seats):
-        row = i // seats_per_row + 1  # row numbers start at 1
-        col = i % seats_per_row       # index into seat_letters
-        lugar = f"{row}{seat_letters[col]}"
-        is_first_class_seat = row <= first_class_rows
-        seats.append((lugar, no_serie, is_first_class_seat))
-    return seats
 
-# Generate all possible city pairs (excluding same city)
-city_pairs = [(a1[2], a2[2]) for a1 in airports for a2 in airports if a1[2] != a2[2]]
-
-# Assign a random flight time (in minutes) and price for each direction
+# Creates a list of all possible pairs of different cities (no city paired with itself), each pair is a tuple: (departure_city, arrival_city)
+city_pairs = [
+    (airport1.city, airport2.city)
+    for airport1 in airports
+    for airport2 in airports
+    if airport1.city != airport2.city
+]
 flight_info_dict = {}
-for dep_city, arr_city in city_pairs:
-    base_minutes = random.randint(60, 210) # 60-210 min (1 to 3.5 hours)
-    base_price_2c = random.randint(80, 350) + 0.99 # 80-350 EUR for 2nd class
-    base_price_1c = round(base_price_2c * 1.2, 2)
-    flight_info_dict[(dep_city, arr_city)] = {
+# Generate flight information for each city pair
+for departure_city, arrival_city in city_pairs:
+    # Randomly generate flight time between 60 and 210 minutes (1 to 3.5 hours)
+    base_minutes = random.randint(60, 210)
+    # Randomly generate base prices for second class between 80.99 and 350.99 euros (prices always end with .99)
+    base_price_2c = random.randint(80, 350) + 0.99
+    # First class price is 40% more than second class price
+    base_price_1c = round(base_price_2c * 1.4, 2)
+    # Store the flight information in a dictionary with the city pair as the key
+    flight_info_dict[(departure_city, arrival_city)] = {
         "flight_time": base_minutes,
-        "preco_2c": base_price_2c,
-        "preco_1c": base_price_1c
+        "price_2c": base_price_2c,
+        "price_1c": base_price_1c
     }
 
-# Flights: ≥5 per day between 1 Jan - 31 Jul 2025
-# Format: (no_serie, hora_partida, hora_chegada, partida, chegada)
-# Each airplane is used, all airports are visited, every flight is followed by a return flight,
-# and each airplane departs from its previous arrival airport.
-def generate_flights():
-    start_date = datetime(2025, 1, 1)
-    end_date = datetime(2025, 7, 31)
-    days = (end_date - start_date).days + 1
+# Start date for the flights 1st January 2025
+start_date = datetime(2025, 1, 1)
+# End date for the flights 31st July 2025
+end_date = datetime(2025, 7, 31)
+days = (end_date - start_date).days + 1
+flights = []
+# Track visited airports to ensure all airports are visited
+visited_airports = set()
+# Track used airplanes to ensure all airplanes are used
+used_airplanes = set()
+for day in range(days):
+    # Increments the days from the start date
+    date = start_date + timedelta(days=day)
+    # Randomly select 3 airplanes for today's flights
+    airplanes_today = random.sample(airplanes, 3)
+    for airplane in airplanes_today:
+        used_airplanes.add(airplane.serial_no)
+        for interval in [(5, 8), (17, 20)]:
+            # Departure Flight
+            departure_airport = random.choice(airports)
+            # Choose an airport in a different city (not same IATA code or city)
+            arrival_airport = random.choice([
+                airport for airport in airports
+                if airport != departure_airport and airport.city != departure_airport.city
+            ])
+            # Generates random departure time within the specified interval
+            departure_hour = random.randint(interval[0], interval[1])
+            departure_time = datetime(date.year, date.month, date.day, departure_hour, random.randint(0, 59))
+            # Gets predefined flight time
+            flight_time = flight_info_dict.get((departure_airport.city, arrival_airport.city), {}).get("flight_time")
+            # Calculate arrival time
+            arrival_time = departure_time + timedelta(minutes=flight_time)
+            # Creates and saves flight
+            flights.append(Flight(airplane, departure_airport, departure_time, arrival_airport, arrival_time))
+            visited_airports.add(departure_airport.iata_code)
+            visited_airports.add(arrival_airport.iata_code)
+            # Return flight
+            # Generates a random return flight departure time with a delay of 30 to 90 minutes from previous arrival time
+            departure_time = arrival_time + timedelta(minutes=random.randint(30, 90))
+            # Gets the time for the return flight, the cities are swapped since it's a return flight.
+            flight_time = flight_info_dict.get((arrival_airport.city, departure_airport.city), {}).get("flight_time")
+            # Calculate arrival time
+            arrival_time = departure_time + timedelta(minutes=flight_time)
+            # Creates and saves return flight
+            flights.append(Flight(airplane, departure_airport, departure_time, arrival_airport, arrival_time))
+            visited_airports.add(departure_airport.iata_code)
+            visited_airports.add(arrival_airport.iata_code)
 
-    # Assign each airplane a random starting airport
-    airplane_locations = {} # key: airplane serial_no, value: airport code
-    shuffled_airports = airports.copy()
-    random.shuffle(shuffled_airports)
-    for idx, airplane in enumerate(airplanes):
-        airport = shuffled_airports[idx % len(shuffled_airports)]
-        random_hour = random.randint(0, 23)
-        random_minute = random.randint(0, 59)
-        arrival_time = datetime(2025, 1, 1, random_hour, random_minute)
-        airplane_locations[airplane[0]] = (airport[0], arrival_time)
+# Validate that all airports and airplanes have been visited/used.
+print(f"All airports visited: {len(visited_airports) >= len(airports)}")
+print(f"All airplanes used: {len(used_airplanes) >= len(airplanes)}")
 
-    flights = []
-    visited_airports = set()
-
-    for day in range(days):
-        date = start_date + timedelta(days=day)
-        airplanes_today = airplanes.copy()
-        random.shuffle(airplanes_today)
-        for airplane in airplanes_today:
-            no_serie, _, _ = airplane
-            for interval in [(5, 8), (17, 20)]:
-                dep_airport, arrival_time = airplane_locations[no_serie]
-                arr_airport = random.choice([a for a in airports if a[0] != dep_airport])[0]
-                # Outbound flight
-                hour = random.randint(interval[0], interval[1])
-                minute = random.randint(0, 59)
-                dep_time = datetime(date.year, date.month, date.day, hour, minute)
-                while dep_time <= arrival_time + timedelta(hours=1):
-                    hour = random.randint(interval[0], interval[1])
-                    minute = random.randint(0, 59)
-                    dep_time = datetime(date.year, date.month, date.day, hour, minute)
-                departure_city = airport_dict[dep_airport][2]
-                arrival_city = airport_dict[arr_airport][2]
-                flight_time = flight_info_dict.get((departure_city, arrival_city), {}).get("flight_time")
-                arr_time = dep_time + timedelta(minutes=flight_time)
-                flights.append((no_serie, dep_time, arr_time, dep_airport, arr_airport))
-                visited_airports.add(dep_airport)
-                visited_airports.add(arr_airport)
-                airplane_locations[no_serie] = (arr_airport, arr_time)
-                # Return flight
-                return_airport = dep_airport
-                return_dep_time = arr_time + timedelta(minutes=random.randint(30, 60))
-                flight_time = flight_info_dict.get((arrival_city, departure_city), {}).get("flight_time")
-                return_arrival_time = return_dep_time + timedelta(minutes=flight_time)
-                flights.append((no_serie, return_dep_time, return_arrival_time, arr_airport, return_airport))
-    return flights, len(visited_airports) >= len(airports)
-
-# Generate flights and route_pairs
-flights, valid = generate_flights()
-
-# Sales and Tickets: >=10,000 sales and >= 30,000 tickets
+# Sales and Tickets
 sales = []
 tickets = []
 sale_id = 1
 for flight_id, flight in enumerate(flights, start=1):
-    airplane = airplanes_dict[flight[0]]
-    capacity = airplane[2]  # Total seats in the airplane
-    ocupancy = random.randint(85, 100) / 100  # Random occupancy between 85% and 100%
-    num_tickets = int(capacity * ocupancy)
-    first_class_available_tickets = capacity // 10  # 10% of total seats are first class
-    second_class_available_tickets = capacity - first_class_available_tickets
-    first_class_available_seats = [seat for seat in generate_seats(airplane[0], capacity) if seat[2] == True]
-    second_class_available_seats = [seat for seat in generate_seats(airplane[0], capacity) if seat[2] == False]
-    while num_tickets > 0:
+    # Randomly select the occupancy of this flight between 85% and 100% (this will be the percentage of tickets sold)
+    ocupancy = random.randint(85, 100) / 100
+    # Calculate the number of tickets to sell based on the occupancy and total seats of the airplane
+    num_tickets_to_sell = int(flight.airplane.total_seats * ocupancy)
+    # Calculate the number of first class and second class seats available
+    first_class_available_seats = [seat for seat in flight.airplane.seats if seat.first_class]
+    second_class_available_seats = [seat for seat in flight.airplane.seats if not seat.first_class]
+    # While there are tickets to sell, create sales and tickets
+    while num_tickets_to_sell > 0:
+        # Names must be unique for tickets in the same sale, so we will use a set to track used names.
         used_names = set()
+        # Generate a random NIF
         nif = f"{random.randint(100000000,999999999)}"
-        balcao = random.choice(airports)[0]
-        airplane_departure_time = flight[1]
-        sale_time = airplane_departure_time - timedelta(days=random.randint(1, 90), hours=random.randint(0, 23), minutes=random.randint(0, 59))
-        sale = (nif, balcao, sale_time)
+        # Randomly select a retail counter (airport) for the sale, or None which represents an online sale (40% chance of online sale).
+        retail_counter = None if random.random() < 0.4 else random.choice(airports)
+        # Generate a random sale time, which is between 1 and 90 days before the flight departure time.
+        sale_time = flight.departure_datetime - timedelta(days=random.randint(1, 90), hours=random.randint(0, 23), minutes=random.randint(0, 59))
+        # Create and save the sale
+        sale = Sale(retail_counter, nif, sale_time)
         sales.append(sale)
+        # Randomly determine how many tickets to sell in this sale (between 1 and 5).
         num_sold_tickets = random.randint(1, 5)
-        if num_sold_tickets > num_tickets:
-            num_sold_tickets = num_tickets
+        # If there are not enough tickets to sell, adjust the number of sold tickets.
+        num_sold_tickets = min(num_sold_tickets, num_tickets_to_sell)
+        # For each ticket to sell, randomly choose first class or second class, ensuring that the choice is valid based on available seats.
         for _ in range(num_sold_tickets):
-            airplane_serial_no = flight[0]
-            if first_class_available_tickets == 0:
-                first_class = False
-            elif second_class_available_tickets == 0:
-                first_class = True
-            else:
+            if first_class_available_seats and second_class_available_seats:
                 first_class = random.choice([True, False])
-            nome = names.get_full_name()
-            while nome in used_names:
-                nome = names.get_full_name()
-            used_names.add(nome)
-            partida_code = flight[4]
-            chegada_code = flight[5]
-            partida_cidade = airport_dict[partida_code][2]
-            chegada_cidade = airport_dict[chegada_code][2]
+            elif second_class_available_seats:
+                first_class = False
+            else:
+                first_class = True
+            # Generate a name for the ticket and ensure it is unique within the sale.
+            name = names.get_full_name()
+            while name in used_names:
+                name = names.get_full_name()
+            used_names.add(name)
+            # Determine the price and seat based on the class chosen.
             if first_class:
-                preco = flight_info_dict.get((partida_cidade, chegada_cidade), {}).get("preco_1c")
+                price = flight_info_dict.get((flight.departure_airport.city, flight.arrival_airport.city), {}).get("price_1c")
+                # Select a random first class seat and remove it from the available seats.
                 chosen_seat = random.choice(first_class_available_seats)
                 first_class_available_seats.remove(chosen_seat)
-                first_class_available_tickets -= 1
             else:
-                preco = flight_info_dict.get((partida_cidade, chegada_cidade), {}).get("preco_2c")
+                price = flight_info_dict.get((flight.departure_airport.city, flight.arrival_airport.city), {}).get("price_2c")
+                # Select a random second class seat and remove it from the available seats.
                 chosen_seat = random.choice(second_class_available_seats)
                 second_class_available_seats.remove(chosen_seat)
-                second_class_available_tickets -= 1
-            lugar, _, _ = chosen_seat
-            tickets.append((flight_id, sale_id, nome, preco, first_class, lugar, airplane_serial_no))
+            # Create and save the ticket
+            tickets.append(Ticket(flight, sale, name, price, chosen_seat, first_class))
+        # Increment the sale ID for the next sale and adjust the number of tickets left to sell.
         sale_id += 1
-        num_tickets -= num_sold_tickets
+        num_tickets_to_sell -= num_sold_tickets
 
-# Write SQL
+# Write SQL statements to populate the database into populate.sql file
 with open("populate.sql", "w", encoding="utf-8") as sql_file:
-    # Airports
-    for code, name, city, country in airports:
-        sql_file.write("INSERT INTO aeroporto (codigo, nome, cidade, pais) VALUES ")
-        sql_file.write(f"('{code}', '{name}', '{city}', '{country}');\n")
 
-    # Airplanes and Respective Seats
-    for no_serie, model, capacity in airplanes:
-        sql_file.write("INSERT INTO aviao (no_serie, modelo) VALUES ")
-        sql_file.write(f"('{no_serie}', '{model}');\n")
-        for lugar, serie, first_class in generate_seats(no_serie, capacity):
-            sql_file.write("INSERT INTO assento (lugar, no_serie, prim_classe) VALUES ")
-            sql_file.write(f"('{lugar}', '{serie}', {'true' if first_class else 'false'});\n")
+    # Airports
+    for airport in airports:
+        sql_file.write("INSERT INTO aeroporto (codigo, name, cidade, pais) VALUES ")
+        sql_file.write(f"('{airport.iata_code}', '{airport.name}', '{airport.city}', '{airport.country}');\n")
+
+    # Airplanes and Seats
+    for airplane in airplanes:
+        sql_file.write("INSERT INTO aviao (serial_no, modelo) VALUES ")
+        sql_file.write(f"('{airplane.serial_no}', '{airplane.model}');\n")
+        for seat in airplane.seats:
+            sql_file.write("INSERT INTO assento (id, serial_no, prim_classe) VALUES ")
+            sql_file.write(f"('{seat.id}', '{airplane.serial_no}', {'true' if seat.first_class else 'false'});\n")
 
     # Flights
-    for flight_id, (no_serie, partida, chegada, dep_airport, arr_airport) in enumerate(flights, start=1):
-        sql_file.write("INSERT INTO voo (no_serie, hora_partida, hora_chegada, partida, chegada) VALUES ")
-        sql_file.write(f"('{no_serie}', '{partida.strftime('%Y-%m-%d %H:%M:%S')}', '{chegada.strftime('%Y-%m-%d %H:%M:%S')}', '{dep_airport}', '{arr_airport}');\n")
+    for flight_id, flight in enumerate(flights, start=1):
+        sql_file.write("INSERT INTO voo (serial_no, departure_datetime, arrival_datetime, partida, chegada) VALUES ")
+        sql_file.write(f"('{flight.airplane.serial_no}', '{flight.departure_datetime.strftime('%Y-%m-%d %H:%M:%S')}', '{flight.arrival_datetime.strftime('%Y-%m-%d %H:%M:%S')}', '{flight.departure_airport.iata_code}', '{flight.arrival_airport.iata_code}');\n")
 
     # Sales
     for sale in sales:
-        nif, balcao, hora = sale
-        sql_file.write("INSERT INTO venda (nif_cliente, balcao, hora) VALUES ")
-        sql_file.write(f"('{nif}', '{balcao}', '{hora.strftime('%Y-%m-%d %H:%M:%S')}');\n")
+        # Get airport IATA code if its a physical sale in which case there is a retail counter, or pass NULL otherwise to represent an online sale.
+        retail_counter = f"'{sale.retail_counter.iata_code}'" if sale.retail_counter is not None else "NULL"
+        sql_file.write("INSERT INTO venda (nif_cliente, retail_counter, datetime) VALUES ")
+        sql_file.write(f"('{sale.nif}', {retail_counter}, '{sale.datetime.strftime('%Y-%m-%d %H:%M:%S')}');\n")
 
     # Tickets
     for ticket in tickets:
-        flight_id, sale_id, nome, preco, first_class, lugar, no_serie = ticket
-        sql_file.write("INSERT INTO bilhete (voo_id, codigo_reserva, nome_passegeiro, preco, prim_classe, lugar, no_serie) VALUES ")
-        sql_file.write(f"({flight_id}, {sale_id}, '{nome}', {preco:.2f}, {'true' if first_class else 'false'}, '{lugar}', '{no_serie}');\n")
+        # Get the flight ID and sale ID based on their index in the lists (1-based index). Mimicking the behavior of an auto-incrementing primary key (SERIAL).
+        flight_id = flights.index(ticket.flight) + 1
+        sale_id = sales.index(ticket.sale) + 1
+        sql_file.write("INSERT INTO bilhete (voo_id, codigo_reserva, name_passegeiro, price, prim_classe, id, serial_no) VALUES ")
+        sql_file.write(f"({flight_id}, {sale_id}, '{ticket.name}', {ticket.price:.2f}, {'true' if ticket.first_class else 'false'}, '{ticket.seat.id}', '{ticket.flight.airplane.serial_no}');\n")
