@@ -5,6 +5,7 @@ ticket purchase, and check-in operations.
 """
 from logging.config import dictConfig
 import re
+import time
 from flask import Flask, jsonify, request
 from psycopg.rows import dict_row
 import psycopg
@@ -49,6 +50,23 @@ db_pool = psycopg_pool.ConnectionPool(
     max_size=10
 )
 
+# Rate limit api endpoints
+RATE_LIMIT = 10  # requests
+TIME_INTERVAL = 60  # in seconds
+rate_limit = {}
+
+def is_rate_limited(ip):
+    """Check if client is above the limit of request for a time interval."""
+    now = time.time()
+    window_start = now - TIME_INTERVAL
+    timestamps = rate_limit.get(ip, [])
+    timestamps = [request_time for request_time in timestamps if request_time > window_start]
+    if len(timestamps) >= RATE_LIMIT:
+        return True
+    timestamps.append(now)
+    rate_limit[ip] = timestamps
+    return False
+
 # Custom Exception Classes
 class ApiError(Exception):
     """Flask API DB request exceptions."""
@@ -77,6 +95,11 @@ def put_db_connection(connnection):
     return db_pool.putconn(connnection)
 
 # Aux functions for API Endpoints
+def airport_exists(db_query, airport_code):
+    """Check if an airport exists by its code."""
+    db_query.execute("SELECT 1 FROM aeroporto WHERE codigo = %s", (airport_code,))
+    return db_query.fetchone()
+
 def list_all_airports_db():
     """List all the airports available on the database."""
     db_connection = get_db_connection()
@@ -95,19 +118,13 @@ def get_departure_flights_db(departure_airport):
     db_connection = get_db_connection()
     try:
         with db_connection.cursor(row_factory=dict_row) as db_query:
-            # Check if the airport exists
-            db_query.execute("SELECT 1 FROM aeroporto WHERE codigo = %s",
+            if not airport_exists(db_query, departure_airport):
+                raise NotFoundError("Aeroporto de partida não encontrado.",
+                    {"partida": departure_airport})
+            db_query.execute("""SELECT no_serie, hora_partida, chegada FROM voo
+                WHERE partida = %s AND hora_partida
+                BETWEEN NOW() AND NOW() + INTERVAL '12 hours'ORDER BY hora_partida""",
                 (departure_airport,))
-            if not db_query.fetchone():
-                raise NotFoundError(f"Aeroporto de partida\
-                    ({departure_airport}) não encontrado.",
-                    {"aeroporto": departure_airport})
-            db_query.execute(
-                """SELECT no_serie, hora_partida, chegada
-                FROM voo WHERE partida = %s 
-                AND hora_partida BETWEEN NOW() AND NOW() + INTERVAL '12 hours'""",
-                (departure_airport)
-            )
             data = db_query.fetchall()
             if not data:
                 raise NotFoundError("Nenhum voo encontrado para este aeroporto \
@@ -124,19 +141,14 @@ def get_available_flights_db(departure_airport, arrival_airport):
     db_connection = get_db_connection()
     try:
         with db_connection.cursor(row_factory=dict_row) as db_query:
-            # Checks if the departure and arrival airports exist
-            db_query.execute("SELECT 1 FROM aeroporto WHERE codigo = %s",
-                (departure_airport))
-            if not db_query.fetchone():
+            if not airport_exists(db_query, departure_airport):
                 raise NotFoundError("Aeroporto de partida não encontrado.",
                     {"partida": departure_airport})
-            db_query.execute("SELECT 1 FROM aeroporto WHERE codigo = %s",
-                (arrival_airport))
-            if not db_query.fetchone():
+            if not airport_exists(db_query, arrival_airport):
                 raise NotFoundError("Aeroporto de chegada não encontrado.",
                     {"chegada": arrival_airport})
             db_query.execute("""
-                SELECT v.no_serie, v.hora_partida
+                SELECT v.id, v.no_serie, v.hora_partida
                 FROM voo v
                 LEFT JOIN (
                     SELECT voo_id, COUNT(*) AS vendidos
@@ -198,6 +210,7 @@ def buy_tickets_db(flight_id, nif, tickets_data):
                 db_query.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
                     VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif))
                 reservation_code = db_query.fetchone()["codigo_reserva"]
+                tickets = []
                 for ticket in tickets_data:
                     available = _get_available_seats(db_query,
                         flight_id, ticket["prim_classe"])
@@ -215,11 +228,12 @@ def buy_tickets_db(flight_id, nif, tickets_data):
                     db_query.execute(
                         """INSERT INTO bilhete (voo_id, codigo_reserva,
                         nome_passegeiro, preco, prim_classe, lugar, no_serie)
-                        VALUES (%s, %s, %s, %s, %s, NULL, NULL) RETURNING id""",
+                        VALUES (%s, %s, %s, %s, %s, NULL, NULL)
+                        RETURNING id, nome_passegeiro, preco, prim_classe""",
                         (flight_id, reservation_code, ticket["nome"],
-                        price_row, ticket["prim_classe"])
-                    )
-        return reservation_code
+                         price_row, ticket["prim_classe"]))
+                    tickets.append(db_query.fetchone())
+        return reservation_code, tickets
     except ApiError:
         db_connection.rollback()
         raise
@@ -255,12 +269,14 @@ def checkin_db(bilhete_id):
                     (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
                 assento = db_query.fetchone()
                 if not assento:
-                    raise ConflictError("Não há assentos disponíveis" \
-                        "para esta classe.",
-                        {"classe": bilhete["prim_classe"], "voo_id": bilhete["voo_id"]})
-                db_query.execute("UPDATE bilhete SET lugar = %s, no_serie = %s WHERE id = %s",
-                (assento["lugar"], voo["no_serie"], bilhete_id))
-        return assento["lugar"]
+                    raise ConflictError("Não há assentos disponíveis para esta classe.",
+                        {"prim_classe": bilhete["prim_classe"], "voo_id": bilhete["voo_id"]})
+                db_query.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
+                    WHERE id = %s RETURNING id, voo_id, codigo_reserva,
+                    nome_passegeiro, lugar, no_serie""",
+                    (assento["lugar"], voo["no_serie"], bilhete_id))
+                data = db_query.fetchone()
+        return data
     except ApiError:
         db_connection.rollback()
         raise
@@ -270,6 +286,13 @@ def checkin_db(bilhete_id):
     finally:
         put_db_connection(db_connection)
 
+
+@app.before_request
+def check_rate_limit():
+    """Enforce rate limit on api endpoints."""
+    ip = request.remote_addr
+    if is_rate_limited(ip):
+        return jsonify({"Error": "Too Many Requests"}), 429
 
 # API Endpoints
 @app.route("/", methods=["GET"])
@@ -320,9 +343,9 @@ def buy_tickets(voo_id):
     if not nif or not isinstance(tickets, list) or not tickets:
         return jsonify({"Erro": "Dados de compra inválidos."}), 400
     try:
-        reservation_code = buy_tickets_db(voo_id, nif, tickets)
+        reservation_code, tickets_info = buy_tickets_db(voo_id, nif, tickets)
         return jsonify({"Message": "Compra efetuada com sucesso.",
-            "codigo_reserva": reservation_code}), 201
+            "codigo_reserva": reservation_code, "bilhetes": tickets_info}), 201
     except NotFoundError as error:
         return jsonify({"Erro": error.message, **error.extra}), 404
     except ConflictError as error:
@@ -336,9 +359,9 @@ def buy_tickets(voo_id):
 def checkin_bilhete(bilhete_id):
     """PUT request to check-in a passenger's ticket."""
     try:
-        seat = checkin_db(bilhete_id)
+        data = checkin_db(bilhete_id)
         return jsonify({"Message": "Check-in efetuado com sucesso.",
-            "lugar": seat}), 200
+            "Bilhete": data}), 200
     except NotFoundError as error:
         return jsonify({"Erro": error.message, **error.extra}), 404
     except ConflictError as error:
