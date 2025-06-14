@@ -50,9 +50,9 @@ db_pool = psycopg_pool.ConnectionPool(
     max_size=10
 )
 
-# Rate limit api endpoints
-RATE_LIMIT = 10  # requests
-TIME_INTERVAL = 60  # in seconds
+# Rate Limit API endpoints
+RATE_LIMIT = 10  # num requests
+TIME_INTERVAL = 60  # per num seconds
 rate_limit = {}
 
 def is_rate_limited(ip):
@@ -60,7 +60,8 @@ def is_rate_limited(ip):
     now = time.time()
     window_start = now - TIME_INTERVAL
     timestamps = rate_limit.get(ip, [])
-    timestamps = [request_time for request_time in timestamps if request_time > window_start]
+    timestamps = [request_time for request_time in timestamps
+        if request_time > window_start]
     if len(timestamps) >= RATE_LIMIT:
         return True
     timestamps.append(now)
@@ -148,7 +149,7 @@ def get_available_flights_db(departure_airport, arrival_airport):
                 raise NotFoundError("Aeroporto de chegada não encontrado.",
                     {"chegada": arrival_airport})
             db_query.execute("""
-                SELECT v.id, v.no_serie, v.hora_partida
+                SELECT v.no_serie, v.hora_partida, v.id
                 FROM voo v
                 LEFT JOIN (
                     SELECT voo_id, COUNT(*) AS vendidos
@@ -208,16 +209,18 @@ def buy_tickets_db(flight_id, nif, tickets_data):
         with db_connection.transaction():
             with db_connection.cursor(row_factory=dict_row) as db_query:
                 db_query.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
-                    VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif))
+                    VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif,))
                 reservation_code = db_query.fetchone()["codigo_reserva"]
-                tickets = []
                 for ticket in tickets_data:
                     available = _get_available_seats(db_query,
                         flight_id, ticket["prim_classe"])
                     if available == 0:
-                        raise ConflictError(f"Não há mais bilhetes de \
-                            {'Primeira classe' if ticket['prim_classe'] else
-                            'classe Económica'} disponíveis.")
+                        raise ConflictError(
+                            f"Não há mais bilhetes de "
+                            f"{'primeira' if ticket['prim_classe'] else 'segunda'} "
+                            "classe disponíveis.",
+                            {"prim_classe": ticket["prim_classe"], "voo_id": flight_id}
+                        )
                     price_row = _get_ticket_price(db_query, flight_id,
                         ticket["prim_classe"])
                     if price_row is None:
@@ -228,12 +231,9 @@ def buy_tickets_db(flight_id, nif, tickets_data):
                     db_query.execute(
                         """INSERT INTO bilhete (voo_id, codigo_reserva,
                         nome_passegeiro, preco, prim_classe, lugar, no_serie)
-                        VALUES (%s, %s, %s, %s, %s, NULL, NULL)
-                        RETURNING id, nome_passegeiro, preco, prim_classe""",
+                        VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
                         (flight_id, reservation_code, ticket["nome"],
                          price_row, ticket["prim_classe"]))
-                    tickets.append(db_query.fetchone())
-        return reservation_code, tickets
     except ApiError:
         db_connection.rollback()
         raise
@@ -249,11 +249,15 @@ def checkin_db(bilhete_id):
     try:
         with db_connection.transaction():
             with db_connection.cursor(row_factory=dict_row) as db_query:
-                db_query.execute("""SELECT voo_id, prim_classe FROM bilhete
-                    WHERE id = %s""", (bilhete_id,))
+                db_query.execute("""SELECT voo_id, prim_classe, lugar, no_serie
+                    FROM bilhete WHERE id = %s""", (bilhete_id,))
                 bilhete = db_query.fetchone()
                 if not bilhete:
                     raise NotFoundError("Bilhete não encontrado.",
+                        {"bilhete_id": bilhete_id})
+                # Check if passenger has already checked in
+                if bilhete["lugar"] is not None and bilhete["no_serie"] is not None:
+                    raise ConflictError("Check-in já realizado para este bilhete.",
                         {"bilhete_id": bilhete_id})
                 db_query.execute("SELECT no_serie FROM voo WHERE id = %s",
                     (bilhete["voo_id"],))
@@ -261,7 +265,7 @@ def checkin_db(bilhete_id):
                 if not voo:
                     raise NotFoundError("Voo não encontrado.",
                         {"voo_id": bilhete["voo_id"]})
-                db_query.execute("""SELECT lugar FROM assento WHERE"
+                db_query.execute("""SELECT lugar FROM assento WHERE
                     no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
                     NOT IN (SELECT lugar, no_serie FROM bilhete
                     WHERE voo_id = %s AND lugar IS NOT NULL AND
@@ -272,11 +276,8 @@ def checkin_db(bilhete_id):
                     raise ConflictError("Não há assentos disponíveis para esta classe.",
                         {"prim_classe": bilhete["prim_classe"], "voo_id": bilhete["voo_id"]})
                 db_query.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
-                    WHERE id = %s RETURNING id, voo_id, codigo_reserva,
-                    nome_passegeiro, lugar, no_serie""",
+                    WHERE id = %s""",
                     (assento["lugar"], voo["no_serie"], bilhete_id))
-                data = db_query.fetchone()
-        return data
     except ApiError:
         db_connection.rollback()
         raise
@@ -343,9 +344,8 @@ def buy_tickets(voo_id):
     if not nif or not isinstance(tickets, list) or not tickets:
         return jsonify({"Erro": "Dados de compra inválidos."}), 400
     try:
-        reservation_code, tickets_info = buy_tickets_db(voo_id, nif, tickets)
-        return jsonify({"Message": "Compra efetuada com sucesso.",
-            "codigo_reserva": reservation_code, "bilhetes": tickets_info}), 201
+        buy_tickets_db(voo_id, nif, tickets)
+        return jsonify({"Message": "Compra efetuada com sucesso."}), 201
     except NotFoundError as error:
         return jsonify({"Erro": error.message, **error.extra}), 404
     except ConflictError as error:
@@ -359,9 +359,8 @@ def buy_tickets(voo_id):
 def checkin_bilhete(bilhete_id):
     """PUT request to check-in a passenger's ticket."""
     try:
-        data = checkin_db(bilhete_id)
-        return jsonify({"Message": "Check-in efetuado com sucesso.",
-            "Bilhete": data}), 200
+        checkin_db(bilhete_id)
+        return jsonify({"Message": "Check-in efetuado com sucesso."}), 200
     except NotFoundError as error:
         return jsonify({"Erro": error.message, **error.extra}), 404
     except ConflictError as error:
