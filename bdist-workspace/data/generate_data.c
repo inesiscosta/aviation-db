@@ -14,6 +14,15 @@
 #define MAX_NAME_LEN 100
 #define SEAT_LETTERS "ABCDEF"
 #define SEATS_PER_ROW 6
+#define MAX_FLIGHT_KEYS 18000
+
+typedef struct {
+    char dep_time[20];
+    char partida[8];
+    char chegada[8];
+} FlightKey;
+
+int used_keys_count = 0;
 
 typedef struct Model {
     char name[32];
@@ -159,6 +168,25 @@ void shuffle_ints(int* array, int n) {
     }
 }
 
+int flight_key_exists(const char* dep_time, const char* partida, const char* chegada, FlightKey *used_keys) {
+    for (int i = 0; i < used_keys_count; ++i) {
+        if (strcmp(used_keys[i].dep_time, dep_time) == 0 &&
+            strcmp(used_keys[i].partida, partida) == 0 &&
+            strcmp(used_keys[i].chegada, chegada) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Helper to add a key
+void add_flight_key(const char* dep_time, const char* partida, const char* chegada, FlightKey *used_keys) {
+    strcpy(used_keys[used_keys_count].dep_time, dep_time);
+    strcpy(used_keys[used_keys_count].partida, partida);
+    strcpy(used_keys[used_keys_count].chegada, chegada);
+    used_keys_count++;
+}
+
 FlightInfo flight_infos[MAX_AIRPORTS * MAX_AIRPORTS];
 int flight_infos_count = 0;
 
@@ -198,6 +226,8 @@ FlightInfo* find_flight_info(const char* dep_city, const char* arr_city) {
 }
 
 int main() {
+    FlightKey *used_keys = malloc(MAX_FLIGHT_KEYS * sizeof(FlightKey));
+
     Flight* flights = malloc(MAX_FLIGHTS * sizeof(Flight));
     int flights_count = 0;
 
@@ -207,8 +237,8 @@ int main() {
     Ticket* tickets = malloc(MAX_TICKETS * sizeof(Ticket));
     int tickets_count = 0;
     srand((unsigned int)time(NULL));
-    FILE* sql_file = fopen("populate.sql", "w");
-    if (!sql_file) { perror("open populate.sql"); return 1; }
+    FILE* sql_file = fopen("populate1.sql", "w");
+    if (!sql_file) { perror("open populate1.sql"); return 1; }
 
     // --- Generate Airports ---
     for (int i = 0; i < airports_count; ++i) {
@@ -286,18 +316,25 @@ int main() {
             for (int interval = 0; interval < 2; ++interval) {
                 int interval_start = interval == 0 ? 5 : 17;
                 int interval_end = interval == 0 ? 8 : 20;
-                int dep_idx = rand() % airports_count;
-                Airport* departure_airport = &airports[dep_idx];
-                int arr_idx;
+                int dep_idx, arr_idx;
+                Airport *departure_airport, *arrival_airport;
+                struct tm departure_time;
+                char dep_buf[20];
+                dep_idx = rand() % airports_count;
+                departure_airport = &airports[dep_idx];
                 do {
                     arr_idx = rand() % airports_count;
                 } while (arr_idx == dep_idx || strcmp(airports[arr_idx].city, departure_airport->city) == 0);
-                Airport* arrival_airport = &airports[arr_idx];
-                struct tm departure_time = date;
-                int dep_hour = interval_start + rand() % (interval_end - interval_start + 1);
-                departure_time.tm_hour = dep_hour;
-                departure_time.tm_min = rand() % 60;
-                departure_time.tm_sec = 0;
+                arrival_airport = &airports[arr_idx];
+                departure_time = date;
+                do {
+                    int dep_hour = interval_start + rand() % (interval_end - interval_start + 1);
+                    departure_time.tm_hour = dep_hour;
+                    departure_time.tm_min = rand() % 60;
+                    departure_time.tm_sec = 0;
+                    format_datetime(&departure_time, dep_buf, sizeof(dep_buf));
+                } while (flight_key_exists(dep_buf, departure_airport->iata_code, arrival_airport->iata_code, used_keys));
+                add_flight_key(dep_buf, departure_airport->iata_code, arrival_airport->iata_code, used_keys);
                 FlightInfo* info = find_flight_info(departure_airport->city, arrival_airport->city);
                 int flight_minutes = info ? info->flight_time : 90;
                 struct tm arrival_time = departure_time;
@@ -308,15 +345,21 @@ int main() {
                 flight->arrival_airport = arrival_airport;
                 flight->departure_datetime = departure_time;
                 flight->arrival_datetime = arrival_time;
-                char dep_buf[20], arr_buf[20];
+                char arr_buf[20];
                 format_datetime(&departure_time, dep_buf, sizeof(dep_buf));
                 format_datetime(&arrival_time, arr_buf, sizeof(arr_buf));
                 fprintf(sql_file, "INSERT INTO voo (no_serie, hora_partida, hora_chegada, partida, chegada) VALUES ('%s', '%s', '%s', '%s', '%s');\n",
                     airplane->serial_no, dep_buf, arr_buf, departure_airport->iata_code, arrival_airport->iata_code);
-                struct tm return_departure = arrival_time;
-                add_minutes(&return_departure, 30 + rand() % 61);
+                char ret_dep_buf[20], ret_arr_buf[20];
+                struct tm return_departure;
+                do {
+                    return_departure = arrival_time;
+                    add_minutes(&return_departure, 30 + rand() % 61);
+                    format_datetime(&return_departure, ret_dep_buf, sizeof(ret_dep_buf));
+                } while (flight_key_exists(ret_dep_buf, arrival_airport->iata_code, departure_airport->iata_code, used_keys));
+                add_flight_key(ret_dep_buf, arrival_airport->iata_code, departure_airport->iata_code, used_keys);
                 FlightInfo* ret_info = find_flight_info(arrival_airport->city, departure_airport->city);
-                int ret_minutes = ret_info ? ret_info->flight_time : 90;
+                int ret_minutes = ret_info->flight_time;
                 struct tm return_arrival = return_departure;
                 add_minutes(&return_arrival, ret_minutes);
                 Flight* return_flight = &flights[flights_count++];
@@ -325,8 +368,6 @@ int main() {
                 return_flight->arrival_airport = departure_airport;
                 return_flight->departure_datetime = return_departure;
                 return_flight->arrival_datetime = return_arrival;
-                char ret_dep_buf[20], ret_arr_buf[20];
-                format_datetime(&return_departure, ret_dep_buf, sizeof(ret_dep_buf));
                 format_datetime(&return_arrival, ret_arr_buf, sizeof(ret_arr_buf));
                 fprintf(sql_file, "INSERT INTO voo (no_serie, hora_partida, hora_chegada, partida, chegada) VALUES ('%s', '%s', '%s', '%s', '%s');\n",
                     airplane->serial_no, ret_dep_buf, ret_arr_buf, arrival_airport->iata_code, departure_airport->iata_code);
@@ -499,6 +540,7 @@ int main() {
 
     fclose(sql_file);
     printf("SQL data generated in populate.sql\n");
+    free(used_keys);
     free(flights);
     free(sales);
     free(tickets);
