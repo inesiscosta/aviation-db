@@ -8,14 +8,12 @@
 #define MAX_MODELS 6
 #define MAX_AIRPLANES 20
 #define MAX_SEATS_PER_AIRPLANE 250
-#define MAX_FLIGHTS 5000
-#define MAX_SALES 200000
-#define MAX_TICKETS 550000
-#define MAX_NAME_LEN 64
+#define MAX_FLIGHTS 18000
+#define MAX_SALES 1600000
+#define MAX_TICKETS 3200000
+#define MAX_NAME_LEN 100
 #define SEAT_LETTERS "ABCDEF"
 #define SEATS_PER_ROW 6
-
-// --- Data Structures ---
 
 typedef struct Model {
     char name[32];
@@ -73,8 +71,6 @@ typedef struct FlightInfo {
     float price_1c;
 } FlightInfo;
 
-// --- Data Arrays ---
-
 Airport airports[MAX_AIRPORTS] = {
     {"VIE", "Vienna Intl", "Vienna", "Austria"},
     {"PRG", "Václav Havel", "Prague", "Czech Republic"},
@@ -112,19 +108,8 @@ int models_count = 6;
 const char* country_prefixes[] = {"CS", "D", "G", "F", "I", "OE", "EC", "PH", "HB"};
 #define COUNTRY_PREFIXES_COUNT (sizeof(country_prefixes)/sizeof(country_prefixes[0]))
 
-Airplane airplanes[MAX_AIRPLANES];
+Airplane airplanes[MAX_AIRPLANES * sizeof(Airplane)];
 int airplanes_count = 20;
-
-Flight flights[MAX_FLIGHTS];
-int flights_count = 0;
-
-Sale sales[MAX_SALES];
-int sales_count = 0;
-
-Ticket tickets[MAX_TICKETS];
-int tickets_count = 0;
-
-// --- Name Arrays ---
 
 const char* first_names[] = {
     "Miguel", "Ana", "João", "Maria", "David", "Sara", "Pedro", "Inês", "Tiago", "Rita",
@@ -142,8 +127,6 @@ const char* last_names[] = {
 };
 #define FIRST_NAMES_COUNT (sizeof(first_names)/sizeof(first_names[0]))
 #define LAST_NAMES_COUNT (sizeof(last_names)/sizeof(last_names[0]))
-
-// --- Helper Functions ---
 
 void random_full_name(char* buf, size_t buflen) {
     int first_idx = rand() % FIRST_NAMES_COUNT;
@@ -176,8 +159,6 @@ void shuffle_ints(int* array, int n) {
     }
 }
 
-// --- Flight Info Generation ---
-
 FlightInfo flight_infos[MAX_AIRPORTS * MAX_AIRPORTS];
 int flight_infos_count = 0;
 
@@ -186,7 +167,6 @@ void generate_flight_infos() {
         for (int j = 0; j < airports_count; ++j) {
             if (i == j) continue;
             if (strcmp(airports[i].city, airports[j].city) == 0) continue;
-            // Check for duplicate (A,B) and (B,A)
             bool exists = false;
             for (int k = 0; k < flight_infos_count; ++k) {
                 if (strcmp(flight_infos[k].departure_city, airports[i].city) == 0 &&
@@ -217,9 +197,15 @@ FlightInfo* find_flight_info(const char* dep_city, const char* arr_city) {
     return NULL;
 }
 
-// --- Main ---
-
 int main() {
+    Flight* flights = malloc(MAX_FLIGHTS * sizeof(Flight));
+    int flights_count = 0;
+
+    Sale* sales = malloc(MAX_SALES * sizeof(Sale));
+    int sales_count = 0;
+
+    Ticket* tickets = malloc(MAX_TICKETS * sizeof(Ticket));
+    int tickets_count = 0;
     srand((unsigned int)time(NULL));
     FILE* sql_file = fopen("populate.sql", "w");
     if (!sql_file) { perror("open populate.sql"); return 1; }
@@ -235,14 +221,11 @@ int main() {
       );
     }
 
-    // --- Generate Airplanes ---
     int used_serials[MAX_AIRPLANES * 10] = {0};
     int used_serials_count = 0;
     for (int i = 0; i < airplanes_count; ++i) {
-        // Random model
         int model_idx = rand() % models_count;
         airplanes[i].model = &models[model_idx];
-        // Generate serial number
         char serial_no[16];
         int unique = 0;
         while (!unique) {
@@ -259,11 +242,9 @@ int main() {
             }
         }
         strcpy(airplanes[i].serial_no, serial_no);
-        // Write airplane SQL
         fprintf(sql_file, "INSERT INTO aviao (no_serie, modelo) VALUES ('%s', '%s');\n",
             airplanes[i].serial_no, airplanes[i].model->name);
 
-        // --- Generate Seats ---
         int total_seats = airplanes[i].model->total_seats;
         int total_rows = (total_seats + SEATS_PER_ROW - 1) / SEATS_PER_ROW;
         int first_class_rows = (int)(total_rows * 0.1);
@@ -283,10 +264,8 @@ int main() {
         }
     }
 
-    // --- Generate Flight Info ---
     generate_flight_infos();
 
-    // --- Generate Flights ---
     struct tm start_date = {0}, end_date = {0};
     start_date.tm_year = 2025 - 1900;
     start_date.tm_mon = 0;  // January
@@ -297,52 +276,43 @@ int main() {
     int days = (int)((mktime(&end_date) - mktime(&start_date)) / (24 * 3600)) + 1;
 
     struct tm date = start_date;
+    printf("Number of days: %d\n", days);
     for (int day = 0; day < days; ++day) {
-        // Pick 3 random airplanes for today
         int airplane_indices[MAX_AIRPLANES];
         for (int i = 0; i < airplanes_count; ++i) airplane_indices[i] = i;
         shuffle_ints(airplane_indices, airplanes_count);
-        for (int a = 0; a < 3; ++a) {
+        for (int a = 0; a < airplanes_count; ++a) {
             Airplane* airplane = &airplanes[airplane_indices[a]];
             for (int interval = 0; interval < 2; ++interval) {
                 int interval_start = interval == 0 ? 5 : 17;
                 int interval_end = interval == 0 ? 8 : 20;
-                // Departure airport
                 int dep_idx = rand() % airports_count;
                 Airport* departure_airport = &airports[dep_idx];
-                // Arrival airport (different city)
                 int arr_idx;
                 do {
                     arr_idx = rand() % airports_count;
                 } while (arr_idx == dep_idx || strcmp(airports[arr_idx].city, departure_airport->city) == 0);
                 Airport* arrival_airport = &airports[arr_idx];
-                // Departure time
                 struct tm departure_time = date;
                 int dep_hour = interval_start + rand() % (interval_end - interval_start + 1);
                 departure_time.tm_hour = dep_hour;
                 departure_time.tm_min = rand() % 60;
                 departure_time.tm_sec = 0;
-                // Flight time
                 FlightInfo* info = find_flight_info(departure_airport->city, arrival_airport->city);
                 int flight_minutes = info ? info->flight_time : 90;
-                // Arrival time
                 struct tm arrival_time = departure_time;
                 add_minutes(&arrival_time, flight_minutes);
-                // Store flight
                 Flight* flight = &flights[flights_count++];
                 flight->airplane = airplane;
                 flight->departure_airport = departure_airport;
                 flight->arrival_airport = arrival_airport;
                 flight->departure_datetime = departure_time;
                 flight->arrival_datetime = arrival_time;
-                // Write flight SQL
                 char dep_buf[20], arr_buf[20];
                 format_datetime(&departure_time, dep_buf, sizeof(dep_buf));
                 format_datetime(&arrival_time, arr_buf, sizeof(arr_buf));
                 fprintf(sql_file, "INSERT INTO voo (no_serie, hora_partida, hora_chegada, partida, chegada) VALUES ('%s', '%s', '%s', '%s', '%s');\n",
                     airplane->serial_no, dep_buf, arr_buf, departure_airport->iata_code, arrival_airport->iata_code);
-
-                // Return flight
                 struct tm return_departure = arrival_time;
                 add_minutes(&return_departure, 30 + rand() % 61);
                 FlightInfo* ret_info = find_flight_info(arrival_airport->city, departure_airport->city);
@@ -365,7 +335,6 @@ int main() {
         add_days(&date, 1);
     }
 
-    // Check that all models are used
     bool model_used[MAX_MODELS] = {0};
     for (int i = 0; i < airplanes_count; ++i) {
       for (int m = 0; m < models_count; ++m) {
@@ -384,7 +353,6 @@ int main() {
     }
     printf("All models used: %s\n", all_models_used ? "true" : "false");
 
-    // Check that all airports are visited (as departure or arrival in any flight)
     bool airport_visited[MAX_AIRPORTS] = {0};
     for (int i = 0; i < flights_count; ++i) {
       for (int a = 0; a < airports_count; ++a) {
@@ -402,7 +370,6 @@ int main() {
     }
     printf("All airports visited: %s\n", all_airports_visited ? "true" : "false");
 
-    // Check that all airplanes are used (in any flight)
     bool airplane_used[MAX_AIRPLANES] = {0};
     for (int i = 0; i < flights_count; ++i) {
       for (int a = 0; a < airplanes_count; ++a) {
@@ -419,15 +386,13 @@ int main() {
       }
     }
     printf("All airplanes used: %s\n", all_airplanes_used ? "true" : "false");
-      
-    // --- Generate Sales and Tickets ---
+
     for (int flight_id = 0; flight_id < flights_count; ++flight_id) {
         Flight* flight = &flights[flight_id];
         int total_seats = flight->airplane->model->total_seats;
         float occupancy = (rand() % 16 + 85) / 100.0f; // 85% to 100%
         int num_tickets_to_sell = (int)(total_seats * occupancy);
 
-        // Collect available seats by class
         int fc_indices[MAX_SEATS_PER_AIRPLANE], sc_indices[MAX_SEATS_PER_AIRPLANE];
         int fc_count = 0, sc_count = 0;
         for (int i = 0; i < total_seats; ++i) {
@@ -438,7 +403,6 @@ int main() {
         }
 
         while (num_tickets_to_sell > 0) {
-            // --- Sale ---
             Sale* sale = &sales[sales_count++];
             snprintf(sale->nif, sizeof(sale->nif), "%09d", 100000000 + rand() % 900000000);
             sale->retail_counter = (rand() % 10 < 6) ? &airports[rand() % airports_count] : NULL;
@@ -452,7 +416,6 @@ int main() {
             mktime(&sale_time);
             sale->datetime = sale_time;
 
-            // --- Tickets in this sale ---
             int num_sold_tickets = 1 + rand() % 5;
             if (num_sold_tickets > num_tickets_to_sell)
                 num_sold_tickets = num_tickets_to_sell;
@@ -465,7 +428,6 @@ int main() {
                 ticket->flight = flight;
                 ticket->sale = sale;
 
-                // Class choice
                 bool first_class;
                 if (fc_count && sc_count)
                     first_class = rand() % 2;
@@ -474,7 +436,6 @@ int main() {
                 else
                     first_class = false;
 
-                // Unique name
                 do {
                     random_full_name(ticket->name, MAX_NAME_LEN);
                     int unique = 1;
@@ -490,7 +451,6 @@ int main() {
                     }
                 } while (1);
 
-                // Price and seat
                 if (first_class && fc_count > 0) {
                     int idx = fc_indices[--fc_count];
                     ticket->seat = &flight->airplane->seats[idx];
@@ -507,7 +467,6 @@ int main() {
             num_tickets_to_sell -= num_sold_tickets;
         }
     }
-    // --- Write Sales and Tickets SQL ---
     for (int i = 0; i < sales_count; ++i) {
         char sale_time_buf[20];
         format_datetime(&sales[i].datetime, sale_time_buf, sizeof(sale_time_buf));
@@ -540,5 +499,8 @@ int main() {
 
     fclose(sql_file);
     printf("SQL data generated in populate.sql\n");
+    free(flights);
+    free(sales);
+    free(tickets);
     return 0;
 }
