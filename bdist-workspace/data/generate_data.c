@@ -311,7 +311,8 @@ int main() {
         int airplane_indices[MAX_AIRPLANES];
         for (int i = 0; i < airplanes_count; ++i) airplane_indices[i] = i;
         shuffle_ints(airplane_indices, airplanes_count);
-        for (int a = 0; a < airplanes_count; ++a) {
+        int chosen_airplanes = (int)(airplanes_count * 0.25);
+        for (int a = 0; a < chosen_airplanes; ++a) {
             Airplane* airplane = &airplanes[airplane_indices[a]];
             for (int interval = 0; interval < 2; ++interval) {
                 int interval_start = interval == 0 ? 5 : 17;
