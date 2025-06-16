@@ -7,6 +7,7 @@ from logging.config import dictConfig
 import re
 import time
 import random
+import os
 from flask import Flask, jsonify, request, abort
 from psycopg.rows import dict_row
 import psycopg
@@ -39,20 +40,21 @@ app.config.from_prefixed_env()
 app.json.sort_keys = False
 log = app.logger
 
+# In this case we don't have the env variable defined, so the default
+# connection string is used.
+DATABASE_URL = os.environ.get("DATABASE_URL",
+    "postgres://postgres:postgres@postgres/aviacao")
+
 # Setup DB connection
 db_pool = psycopg_pool.ConnectionPool(
-    conninfo=(
-        "dbname=aviacao "
-        "user=postgres "
-        "password=postgres "
-        "host=postgres"
-    ),
+    conninfo=DATABASE_URL,
     min_size=1,
-    max_size=10
+    max_size=10,
+    timeout=5
 )
 
 # Rate Limit API endpoints
-RATE_LIMIT = 10     # num requests
+RATE_LIMIT = 100     # num requests
 TIME_INTERVAL = 60  # per num seconds
 rate_limit = {}
 
@@ -130,8 +132,8 @@ def get_data_next_departure_flights(departure_airport):
                 raise NotFoundError(f"""Aeroporto de partida ({departure_airport})
                     não encontrado.""")
             cursor.execute("""SELECT no_serie, hora_partida, chegada FROM voo
-                WHERE partida = %s AND hora_partida BETWEEN NOW() AND
-                NOW() + INTERVAL '12 hours'""",
+                WHERE partida = %s AND hora_partida
+                BETWEEN NOW() AND NOW() + INTERVAL '12 hours'""",
                 (departure_airport,))
             data = cursor.fetchall()
             if not data:
@@ -150,35 +152,37 @@ def get_available_flights(departure_airport, arrival_airport):
     try:
         with db_connection.cursor(row_factory=dict_row) as cursor:
             if not airport_exists(cursor, departure_airport):
-                raise NotFoundError(f"""Aeroporto de partida
-                    ({departure_airport}) não encontrado.""")
+                raise NotFoundError(f"Aeroporto de partida "
+                    f"({departure_airport}) não encontrado.")
             if not airport_exists(cursor, arrival_airport):
-                raise NotFoundError(f"""Aeroporto de chegada
-                    ({arrival_airport}) não encontrado.""")
+                raise NotFoundError(f"Aeroporto de chegada "
+                    f"({arrival_airport}) não encontrado.")
+            # a = assentos por avião, b = bilhetes por voo
             cursor.execute("""
-                SELECT v.no_serie, v.hora_partida, v.id
+                SELECT v.no_serie, v.hora_partida
                 FROM voo v
+                JOIN (
+                    SELECT no_serie, COUNT(*) AS total_assentos
+                    FROM assento
+                    GROUP BY no_serie
+                ) a ON v.no_serie = a.no_serie
                 LEFT JOIN (
                     SELECT voo_id, COUNT(*) AS vendidos
                     FROM bilhete
                     GROUP BY voo_id
                 ) b ON v.id = b.voo_id
-                JOIN (
-                    SELECT no_serie, COUNT(*) AS capacidade
-                    FROM assento
-                    GROUP BY no_serie
-                ) a ON v.no_serie = a.no_serie
-                WHERE v.partida = %s AND v.chegada = %s
+                WHERE v.partida = %s
+                  AND v.chegada = %s
                   AND v.hora_partida > NOW()
-                  AND (COALESCE(b.vendidos,0) < a.capacidade)
+                  AND COALESCE(b.vendidos, 0) < a.total_assentos
                 ORDER BY v.hora_partida
                 LIMIT 3
             """, (departure_airport, arrival_airport))
             data = cursor.fetchall()
             if not data:
-                raise NotFoundError(f"""Nenhum voo com lugares disponíveis
-                    encontrado para a rota desejada.
-                    Origem: {departure_airport}, Destino: {arrival_airport}.""")
+                raise NotFoundError(f"Nenhum voo com lugares disponíveis "
+                    f"encontrado para a rota desejada. "
+                    f"Origem: {departure_airport}, Destino: {arrival_airport}.")
             return data
     except psycopg.Error as error:
         raise ApiError("Erro ao obter os voos disponíveis.",
@@ -231,28 +235,41 @@ def register_sale(flight_id, nif, tickets_data):
     """Buy tickets for a flight, ensuring availability before selling."""
     db_connection = get_db_connection()
     try:
-        with db_connection.transaction():
-            with db_connection.cursor(row_factory=dict_row) as cursor:
+        with db_connection.cursor(row_factory=dict_row) as cursor:
+            # Verify the flight exists
+            cursor.execute("SELECT EXISTS(SELECT 1 FROM voo WHERE id = %s)",
+                (flight_id,))
+            if not cursor.fetchone()["exists"]:
+                raise NotFoundError(f"Voo ({flight_id}) não encontrado.")
+            with db_connection.transaction():
                 cursor.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
                     VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif,))
                 reservation_code = cursor.fetchone()["codigo_reserva"]
                 for ticket in tickets_data:
+                    if not isinstance(ticket, dict) or \
+                        "nome" not in ticket or \
+                        "prim_classe" not in ticket:
+                        raise BadRequestError("Dados de bilhete inválidos." \
+                        "É necessário fornecer o nome do passageiro e a" \
+                        "classe (prim_classe) do bilhete.")
                     available = get_available_seats(cursor,
                         flight_id, ticket["prim_classe"])
                     if available == 0:
                         raise ConflictError(
-                            f"""Não há mais bilhetes de
-                            {'primeira' if ticket['prim_classe'] else
-                             'segunda'} classe disponíveis
-                             para o voo {flight_id}.""")
+                            f"Não há mais bilhetes de "
+                            f"{'primeira' 
+                            if str(ticket['prim_classe']).lower() == 'true'
+                            else 'segunda'} "
+                            f"classe disponíveis para o voo {flight_id}."
+                        )
                     price_row = get_ticket_price(cursor, flight_id,
                         ticket["prim_classe"])
                     cursor.execute(
                         """INSERT INTO bilhete (voo_id, codigo_reserva,
-                        nome_passegeiro, preco, prim_classe)
-                        VALUES (%s, %s, %s, %s, %s)""",
+                        nome_passegeiro, preco, prim_classe, lugar, no_serie)
+                        VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
                         (flight_id, reservation_code, ticket["nome"],
-                         price_row, ticket["prim_classe"]))
+                            price_row, ticket["prim_classe"]))
     except ApiError:
         db_connection.rollback()
         raise
@@ -269,42 +286,41 @@ def register_check_in(bilhete_id):
         with db_connection.transaction():
             with db_connection.cursor(row_factory=dict_row) as db_query:
                 db_query.execute("""SELECT voo_id, prim_classe, lugar, no_serie
-                    FROM bilhete WHERE id = %s""", (bilhete_id,))
+                    FROM bilhete WHERE id = %s
+                    FOR UPDATE NOWAIT""", (bilhete_id,))
                 bilhete = db_query.fetchone()
                 if not bilhete:
-                    raise NotFoundError(f"""Bilhete não encontrado
-                        Bilhete ID: {bilhete_id}.""")
+                    raise NotFoundError(f"Bilhete não encontrado "
+                        f"Bilhete ID: {bilhete_id}.")
                 # Check if passenger has already checked in
                 if bilhete["lugar"] is not None and bilhete["no_serie"] is not None:
                     raise ConflictError(
-                        f"""Check-in já realizado para este bilhete.
-                        Bilhete ID: {bilhete_id}.""")
+                        f"Check-in já realizado para este bilhete. "
+                        f"Bilhete ID: {bilhete_id}.")
                 db_query.execute("SELECT no_serie FROM voo WHERE id = %s",
                     (bilhete["voo_id"],))
                 voo = db_query.fetchone()
                 if not voo:
-                    raise NotFoundError(f"""Voo não encontrado
-                        Voo ID: {bilhete['voo_id']}.""")
+                    raise NotFoundError(f"Voo {bilhete['voo_id']} não encontrado")
                 db_query.execute("""SELECT lugar FROM assento WHERE
                     no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
-                    NOT IN (SELECT lugar, no_serie FROM bilhete
-                    WHERE voo_id = %s AND lugar IS NOT NULL AND
-                    no_serie IS NOT NULL) LIMIT 1""",
+                    NOT IN (SELECT lugar FROM bilhete
+                    WHERE voo_id = %s) FOR UPDATE SKIP LOCKED LIMIT 1""",
                     (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
                 assento = db_query.fetchone()
                 if not assento:
                     raise ConflictError(
-                        f"""Não há assentos disponíveis para esta classe. Voo ID:
-                        {bilhete['voo_id']}, Primeira Classe: {bilhete['prim_classe']}.""")
+                        f"Não há assentos disponíveis para esta classe. Voo ID: "
+                        f"{bilhete['voo_id']}, Primeira Classe: {bilhete['prim_classe']}.")
                 db_query.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
                     WHERE id = %s""",
                     (assento["lugar"], voo["no_serie"], bilhete_id))
     except ApiError:
         db_connection.rollback()
         raise
-    except Exception as error:
+    except Exception as e:
         db_connection.rollback()
-        raise ApiError("Erro ao fazer check-in.", {"detalhes": str(error)}) from error
+        raise ApiError("Erro ao fazer check-in.", {"detalhes": str(e)}) from e
     finally:
         put_db_connection(db_connection)
 
@@ -315,7 +331,7 @@ def list_all_airports():
     data = get_data_all_airports()
     return jsonify(data), 200
 
-@app.route("/voos/<partida>", methods=["GET"])
+@app.route("/voos/<partida>/", methods=["GET"])
 def list_next_departure_flights(partida):
     """GET all flights departing a given airport in the next 12 hours."""
     departure_airport = partida
@@ -324,7 +340,7 @@ def list_next_departure_flights(partida):
     data = get_data_next_departure_flights(departure_airport)
     return jsonify(data), 200
 
-@app.route("/voos/<partida>/<chegada>", methods=["GET"])
+@app.route("/voos/<partida>/<chegada>/", methods=["GET"])
 def list_available_flights_between_airports(partida, chegada):
     """GET the next 3 available flights between the given
         arrival and departure airports."""
@@ -346,7 +362,7 @@ def buy_tickets(voo_id):
     register_sale(voo_id, nif, tickets)
     return jsonify({"Message": "Compra efetuada com sucesso."}), 201
 
-@app.route("/checkin/<int:bilhete_id>/", methods=["PUT"])
+@app.route("/checkin/<int:bilhete_id>/", methods=["POST"])
 def check_in(bilhete_id):
     """PUT request to check-in a passenger's ticket."""
     register_check_in(bilhete_id)
