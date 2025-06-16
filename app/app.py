@@ -197,7 +197,7 @@ def get_available_seats(cursor, flight_id, prim_classe):
             SELECT lugar FROM bilhete
             WHERE voo_id = %s
         )
-    """, (flight_id, prim_classe, flight_id, prim_classe))
+    """, (flight_id, prim_classe, flight_id))
     return cursor.fetchone()["no_assentos"]
 
 def get_ticket_price(cursor, flight_id, prim_classe):
@@ -272,18 +272,19 @@ def register_check_in(bilhete_id):
                     FROM bilhete WHERE id = %s""", (bilhete_id,))
                 bilhete = db_query.fetchone()
                 if not bilhete:
-                    raise NotFoundError("Bilhete não encontrado.",
-                        {"bilhete_id": bilhete_id})
+                    raise NotFoundError(f"""Bilhete não encontrado
+                        Bilhete ID: {bilhete_id}.""")
                 # Check if passenger has already checked in
                 if bilhete["lugar"] is not None and bilhete["no_serie"] is not None:
-                    raise ConflictError("Check-in já realizado para este bilhete.",
-                        {"bilhete_id": bilhete_id})
+                    raise ConflictError(
+                        f"""Check-in já realizado para este bilhete.
+                        Bilhete ID: {bilhete_id}.""")
                 db_query.execute("SELECT no_serie FROM voo WHERE id = %s",
                     (bilhete["voo_id"],))
                 voo = db_query.fetchone()
                 if not voo:
-                    raise NotFoundError("Voo não encontrado.",
-                        {"voo_id": bilhete["voo_id"]})
+                    raise NotFoundError(f"""Voo não encontrado
+                        Voo ID: {bilhete['voo_id']}.""")
                 db_query.execute("""SELECT lugar FROM assento WHERE
                     no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
                     NOT IN (SELECT lugar, no_serie FROM bilhete
@@ -292,8 +293,9 @@ def register_check_in(bilhete_id):
                     (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
                 assento = db_query.fetchone()
                 if not assento:
-                    raise ConflictError("Não há assentos disponíveis para esta classe.",
-                        {"prim_classe": bilhete["prim_classe"], "voo_id": bilhete["voo_id"]})
+                    raise ConflictError(
+                        f"""Não há assentos disponíveis para esta classe. Voo ID:
+                        {bilhete['voo_id']}, Primeira Classe: {bilhete['prim_classe']}.""")
                 db_query.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
                     WHERE id = %s""",
                     (assento["lugar"], voo["no_serie"], bilhete_id))
