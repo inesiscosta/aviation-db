@@ -94,7 +94,7 @@ def test_ri1_checkin_validation(db_query, db_connection, counters):
         print_test_result("RI-1.2: Wrong class assignment (economy ticket to first class seat)", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "Classe do bilhete" in str(e) or "O assento atribuído" in str(e):
+        if "Erro no check-in do bilhete:" in str(e):
             print_test_result("RI-1.2: Wrong class assignment (Assign first class seat to economy ticket)", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-1.2: Wrong class assignment (Assign first class seat to economy ticket)", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -111,7 +111,7 @@ def test_ri1_checkin_validation(db_query, db_connection, counters):
         print_test_result("RI-1.3: Wrong airplane assignment", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "Classe do bilhete" in str(e) or "O assento atribuído" in str(e):
+        if "Erro no check-in do bilhete:" in str(e):
             print_test_result("RI-1.3: Wrong airplane assignment", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-1.3: Wrong airplane assignment", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -127,7 +127,7 @@ def test_ri1_checkin_validation(db_query, db_connection, counters):
         print_test_result("RI-1.4: Update seat assignment", "SUCCESS", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "Classe do bilhete" in str(e) or "O assento atribuído" in str(e):
+        if "Erro no check-in do bilhete:" in str(e):
             print_test_result("RI-1.4: Update seat assignment", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-1.4: Update seat assignment", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -161,7 +161,7 @@ def test_ri2_capacity_validation(db_query, db_connection, counters):
         print_test_result("RI-2.2: First class capacity overflow", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "Excedida a capacidade de 1" in str(e):
+        if "Erro de venda:" in str(e):
             print_test_result("RI-2.2: First class capacity overflow", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-2.2: First class capacity overflow", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -183,7 +183,7 @@ def test_ri2_capacity_validation(db_query, db_connection, counters):
         print_test_result("RI-2.4: Economy class capacity overflow", "VIOLATION", "SUCCESS", counters)
     except psycopg2.Error as e:
         db_connection.rollback()
-        if "Excedida a capacidade de 2" in str(e):
+        if "Erro de venda:" in str(e):
             print_test_result("RI-2.4: Economy class capacity overflow", "VIOLATION", "VIOLATION", counters)
         else:
             print_test_result("RI-2.4: Economy class capacity overflow", "VIOLATION", "OTHER_ERROR", counters, str(e))
@@ -217,7 +217,7 @@ def test_ri3_sale_time_validation(db_query, db_connection, counters):
             print_test_result(f"RI-3.{i}: {description}", expected, "SUCCESS", counters)
         except psycopg2.Error as e:
             db_connection.rollback()
-            if "Hora da venda" in str(e):
+            if "Erro de venda:" in str(e):
                 print_test_result(f"RI-3.{i}: {description}", expected, "VIOLATION", counters)
             else:
                 print_test_result(f"RI-3.{i}: {description}", expected, "OTHER_ERROR", counters, str(e))
