@@ -6,7 +6,8 @@ ticket purchase, and check-in operations.
 from logging.config import dictConfig
 import re
 import time
-from flask import Flask, jsonify, request
+import random
+from flask import Flask, jsonify, request, abort
 from psycopg.rows import dict_row
 import psycopg
 import psycopg_pool
@@ -51,40 +52,34 @@ db_pool = psycopg_pool.ConnectionPool(
 )
 
 # Rate Limit API endpoints
-RATE_LIMIT = 10  # num requests
+RATE_LIMIT = 10     # num requests
 TIME_INTERVAL = 60  # per num seconds
 rate_limit = {}
-
-def is_rate_limited(ip):
-    """Check if client is above the limit of request for a time interval."""
-    now = time.time()
-    window_start = now - TIME_INTERVAL
-    timestamps = rate_limit.get(ip, [])
-    timestamps = [request_time for request_time in timestamps
-        if request_time > window_start]
-    if len(timestamps) >= RATE_LIMIT:
-        return True
-    timestamps.append(now)
-    rate_limit[ip] = timestamps
-    return False
 
 # Custom Exception Classes
 class ApiError(Exception):
     """Flask API DB request exceptions."""
-    def __init__(self, message, extra=None):
+    def __init__(self, code, message, error = None):
         super().__init__(message)
-        self.message = message
-        self.extra = extra or {}
+        self.error = error
+        self.code = code if code else 500
+        self.description = message or {}
 
 # Speciallization of API Exception
 class NotFoundError(ApiError):
     """Not found errors."""
+    def __init__(self, message):
+        super().__init__(404, message, error="Not Found")
 
 class ConflictError(ApiError):
     """Conflict errors."""
+    def __init__(self, message):
+        super().__init__(409, message, error="Conflict")
 
 class BadRequestError(ApiError):
     """Bad request errors."""
+    def __init__(self, message):
+        super().__init__(400, message, error="Bad Request")
 
 # Database Connection pool helpers
 def get_db_connection():
@@ -95,60 +90,72 @@ def put_db_connection(connnection):
     """Release db connection into the pool."""
     return db_pool.putconn(connnection)
 
-# Aux functions for API Endpoints
-def airport_exists(db_query, airport_code):
-    """Check if an airport exists by its code."""
-    db_query.execute("SELECT 1 FROM aeroporto WHERE codigo = %s", (airport_code,))
-    return db_query.fetchone()
+# Rate Limiting Helper
+def is_rate_limited(ip):
+    """Check if client is above the limit of requests for a time interval."""
+    now = time.time()
+    timestamps = [t for t in rate_limit.get(ip, []) if t > now - TIME_INTERVAL]
+    if len(timestamps) >= RATE_LIMIT:
+        return True
+    timestamps.append(now)
+    rate_limit[ip] = timestamps
+    return False
 
-def list_all_airports_db():
+# Aux functions for API Endpoints
+def get_data_all_airports():
     """List all the airports available on the database."""
     db_connection = get_db_connection()
     try:
-        with db_connection.cursor(row_factory=dict_row) as db_query:
-            db_query.execute("SELECT nome, cidade FROM aeroporto")
-            return db_query.fetchall()
-    except psycopg.Error as error:
-        return ApiError("Erro ao listar todos os aeroportos.",
-            {"detalhes": str(error)})
+        with db_connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("SELECT nome, cidade FROM aeroporto")
+            return cursor.fetchall()
+    except psycopg.Error as e:
+        raise ApiError("Erro ao listar todos os aeroportos.",
+            {"detalhes": str(e)}) from e
     finally:
         put_db_connection(db_connection)
 
-def get_departure_flights_db(departure_airport):
-    """Lists all flights departing the selected airport in the next 12 hours."""
+def airport_exists(cursor, airport_code):
+    """Check if an airport exists by its code."""
+    cursor.execute("SELECT EXISTS(SELECT 1 FROM aeroporto WHERE codigo = %s)",
+        (airport_code,))
+    return cursor.fetchone()["exists"]
+
+def get_data_next_departure_flights(departure_airport):
+    """Gets all flights departing the selected airport in the next 12 hours."""
     db_connection = get_db_connection()
     try:
-        with db_connection.cursor(row_factory=dict_row) as db_query:
-            if not airport_exists(db_query, departure_airport):
-                raise NotFoundError("Aeroporto de partida não encontrado.",
-                    {"partida": departure_airport})
-            db_query.execute("""SELECT no_serie, hora_partida, chegada FROM voo
-                WHERE partida = %s AND hora_partida
-                BETWEEN NOW() AND NOW() + INTERVAL '12 hours'ORDER BY hora_partida""",
+        with db_connection.cursor(row_factory=dict_row) as cursor:
+            if not airport_exists(cursor, departure_airport):
+                raise NotFoundError(f"""Aeroporto de partida ({departure_airport})
+                    não encontrado.""")
+            cursor.execute("""SELECT no_serie, hora_partida, chegada FROM voo
+                WHERE partida = %s AND hora_partida BETWEEN NOW() AND
+                NOW() + INTERVAL '12 hours'""",
                 (departure_airport,))
-            data = db_query.fetchall()
+            data = cursor.fetchall()
             if not data:
-                raise NotFoundError("Nenhum voo encontrado para este aeroporto \
-                    nas próximas 12 horas.", {"aeroporto": departure_airport})
+                raise NotFoundError(f"""Nenhum voo encontrado para o aeroporto
+                    {departure_airport} nas próximas 12 horas.""")
             return data
     except psycopg.Error as error:
-        raise ApiError("Erro ao obter os voos a partir.",
+        raise ApiError("Erro ao obter os voos que partem nas próximas 12 horas.",
             {"detalhes": str(error)}) from error
     finally:
         put_db_connection(db_connection)
 
-def get_available_flights_db(departure_airport, arrival_airport):
+def get_available_flights(departure_airport, arrival_airport):
     """Lists the next 3 flights with available capacity."""
     db_connection = get_db_connection()
     try:
-        with db_connection.cursor(row_factory=dict_row) as db_query:
-            if not airport_exists(db_query, departure_airport):
-                raise NotFoundError("Aeroporto de partida não encontrado.",
-                    {"partida": departure_airport})
-            if not airport_exists(db_query, arrival_airport):
-                raise NotFoundError("Aeroporto de chegada não encontrado.",
-                    {"chegada": arrival_airport})
-            db_query.execute("""
+        with db_connection.cursor(row_factory=dict_row) as cursor:
+            if not airport_exists(cursor, departure_airport):
+                raise NotFoundError(f"""Aeroporto de partida
+                    ({departure_airport}) não encontrado.""")
+            if not airport_exists(cursor, arrival_airport):
+                raise NotFoundError(f"""Aeroporto de chegada
+                    ({arrival_airport}) não encontrado.""")
+            cursor.execute("""
                 SELECT v.no_serie, v.hora_partida, v.id
                 FROM voo v
                 LEFT JOIN (
@@ -167,12 +174,11 @@ def get_available_flights_db(departure_airport, arrival_airport):
                 ORDER BY v.hora_partida
                 LIMIT 3
             """, (departure_airport, arrival_airport))
-            data = db_query.fetchall()
+            data = cursor.fetchall()
             if not data:
-                raise NotFoundError("Nenhum voo com lugares disponíveis \
-                    encontrado para a rota desejada.",
-                    {"partida": departure_airport,
-                    "chegada": arrival_airport})
+                raise NotFoundError(f"""Nenhum voo com lugares disponíveis
+                    encontrado para a rota desejada.
+                    Origem: {departure_airport}, Destino: {arrival_airport}.""")
             return data
     except psycopg.Error as error:
         raise ApiError("Erro ao obter os voos disponíveis.",
@@ -180,70 +186,83 @@ def get_available_flights_db(departure_airport, arrival_airport):
     finally:
         put_db_connection(db_connection)
 
-def _get_available_seats(db_query, flight_id, prim_classe):
+def get_available_seats(cursor, flight_id, prim_classe):
     """Returns the number of available seats for a given flight and class."""
-    db_query.execute("""
-        SELECT COUNT(*) AS total
+    cursor.execute("""
+        SELECT COUNT(*) AS no_assentos
         FROM assento
         WHERE no_serie = (SELECT no_serie FROM voo WHERE id = %s)
         AND prim_classe = %s
         AND lugar NOT IN (
             SELECT lugar FROM bilhete
-            WHERE voo_id = %s AND prim_classe = %s AND lugar IS NOT NULL
+            WHERE voo_id = %s
         )
     """, (flight_id, prim_classe, flight_id, prim_classe))
-    return db_query.fetchone()["total"]
+    return cursor.fetchone()["no_assentos"]
 
-def _get_ticket_price(db_query, flight_id, prim_classe):
-    """Get the ticket price for a given flight and class."""
-    db_query.execute("""SELECT preco FROM bilhete
-        WHERE voo_id = %s AND prim_classe = %s LIMIT 1""",
-        (flight_id, prim_classe))
-    data = db_query.fetchone()
-    return data["preco"] if data else None
+def get_ticket_price(cursor, flight_id, prim_classe):
+    """Get the ticket price for a given flight and class.
+    If not found, try the other class and adjust price by 40%.
+    If still not found, generate a random price.
+    """
+    cursor.execute( # Check existing price for the specified class and flight
+        """SELECT preco FROM bilhete WHERE voo_id = %s AND prim_classe = %s
+        AND preco IS NOT NULL LIMIT 1""",
+        (flight_id, prim_classe)
+    )
+    row = cursor.fetchone()
+    if row: return row["preco"]
 
-def buy_tickets_db(flight_id, nif, tickets_data):
+    # If no price is found check existing price for the other class
+    cursor.execute(
+        """SELECT preco FROM bilhete WHERE voo_id = %s AND prim_classe = %s
+        AND preco IS NOT NULL LIMIT 1""",
+        (flight_id, not prim_classe)
+    )
+    row = cursor.fetchone()
+    # If still no price is found, generate random price.
+    if not row: return round(random.uniform(80, 350), 2)
+    # If a price is found, adjust it based on the class
+    # 40% more for first class, 40% less for second class
+    alt_price = row["preco"]
+    return round(alt_price * 1.4, 2) if prim_classe else round(alt_price * 0.6, 2)
+
+def register_sale(flight_id, nif, tickets_data):
     """Buy tickets for a flight, ensuring availability before selling."""
     db_connection = get_db_connection()
     try:
         with db_connection.transaction():
-            with db_connection.cursor(row_factory=dict_row) as db_query:
-                db_query.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
+            with db_connection.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
                     VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif,))
-                reservation_code = db_query.fetchone()["codigo_reserva"]
+                reservation_code = cursor.fetchone()["codigo_reserva"]
                 for ticket in tickets_data:
-                    available = _get_available_seats(db_query,
+                    available = get_available_seats(cursor,
                         flight_id, ticket["prim_classe"])
                     if available == 0:
                         raise ConflictError(
-                            f"Não há mais bilhetes de "
-                            f"{'primeira' if ticket['prim_classe'] else 'segunda'} "
-                            "classe disponíveis.",
-                            {"prim_classe": ticket["prim_classe"], "voo_id": flight_id}
-                        )
-                    price_row = _get_ticket_price(db_query, flight_id,
+                            f"""Não há mais bilhetes de
+                            {'primeira' if ticket['prim_classe'] else
+                             'segunda'} classe disponíveis
+                             para o voo {flight_id}.""")
+                    price_row = get_ticket_price(cursor, flight_id,
                         ticket["prim_classe"])
-                    if price_row is None:
-                        raise NotFoundError(
-                            "Preço não encontrado para o voo e classe especificados.",
-                            {"Voo": flight_id, "prim_classe": ticket["prim_classe"]}
-                        )
-                    db_query.execute(
+                    cursor.execute(
                         """INSERT INTO bilhete (voo_id, codigo_reserva,
-                        nome_passegeiro, preco, prim_classe, lugar, no_serie)
-                        VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
+                        nome_passegeiro, preco, prim_classe)
+                        VALUES (%s, %s, %s, %s, %s)""",
                         (flight_id, reservation_code, ticket["nome"],
                          price_row, ticket["prim_classe"]))
     except ApiError:
         db_connection.rollback()
         raise
-    except Exception as error:
+    except (psycopg.Error, Exception) as e:
         db_connection.rollback()
-        raise ApiError("Erro ao comprar bilhetes.", {"detalhes": str(error)}) from error
+        raise ApiError("Erro ao comprar bilhetes.", {"detalhes": str(e)}) from e
     finally:
         put_db_connection(db_connection)
 
-def checkin_db(bilhete_id):
+def register_check_in(bilhete_id):
     """Checks in the passenger, assigns a seat to the ticket in the correct class."""
     db_connection = get_db_connection()
     try:
@@ -287,53 +306,32 @@ def checkin_db(bilhete_id):
     finally:
         put_db_connection(db_connection)
 
-
-@app.before_request
-def check_rate_limit():
-    """Enforce rate limit on api endpoints."""
-    ip = request.remote_addr
-    if is_rate_limited(ip):
-        return jsonify({"Error": "Too Many Requests"}), 429
-
 # API Endpoints
 @app.route("/", methods=["GET"])
 def list_all_airports():
     """GET all airport names and cities in JSON format."""
-    try:
-        data = list_all_airports_db()
-        return jsonify(data), 200
-    except ApiError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 500
+    data = get_data_all_airports()
+    return jsonify(data), 200
 
 @app.route("/voos/<partida>", methods=["GET"])
-def get_departure_filghts(partida):
+def list_next_departure_flights(partida):
     """GET all flights departing a given airport in the next 12 hours."""
     departure_airport = partida
     if not re.fullmatch(r"[A-Z]{3}", departure_airport):
-        return jsonify({"Erro": "Código de aeroporto inválido."}), 400
-    try:
-        data = get_departure_flights_db(departure_airport)
-        return jsonify(data), 200
-    except NotFoundError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 404
-    except ApiError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 500
+        raise BadRequestError("Código de aeroporto de partida inválido.")
+    data = get_data_next_departure_flights(departure_airport)
+    return jsonify(data), 200
 
 @app.route("/voos/<partida>/<chegada>", methods=["GET"])
-def get_available_filghts(partida, chegada):
+def list_available_flights_between_airports(partida, chegada):
     """GET the next 3 available flights between the given
         arrival and departure airports."""
     if not re.fullmatch(r"[A-Z]{3}", partida):
-        return jsonify({"Erro": "Código de aeroporto de partida inválido."}), 400
+        raise BadRequestError("Código de aeroporto de partida inválido.")
     if not re.fullmatch(r"[A-Z]{3}", chegada):
-        return jsonify({"Erro": "Código de aeroporto de chegada inválido."}), 400
-    try:
-        data = get_available_flights_db(partida, chegada)
-        return jsonify(data), 200
-    except NotFoundError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 404
-    except ApiError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 500
+        raise BadRequestError("Código de aeroporto de chegada inválido.")
+    data = get_available_flights(partida, chegada)
+    return jsonify(data), 200
 
 @app.route("/compra/<int:voo_id>/", methods=["POST"])
 def buy_tickets(voo_id):
@@ -342,31 +340,31 @@ def buy_tickets(voo_id):
     nif = data.get("nif")
     tickets = data.get("bilhetes")
     if not nif or not isinstance(tickets, list) or not tickets:
-        return jsonify({"Erro": "Dados de compra inválidos."}), 400
-    try:
-        buy_tickets_db(voo_id, nif, tickets)
-        return jsonify({"Message": "Compra efetuada com sucesso."}), 201
-    except NotFoundError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 404
-    except ConflictError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 409
-    except BadRequestError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 400
-    except ApiError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 500
+        raise BadRequestError("Dados inválidos para compra de bilhetes.")
+    register_sale(voo_id, nif, tickets)
+    return jsonify({"Message": "Compra efetuada com sucesso."}), 201
 
 @app.route("/checkin/<int:bilhete_id>/", methods=["PUT"])
-def checkin_bilhete(bilhete_id):
+def check_in(bilhete_id):
     """PUT request to check-in a passenger's ticket."""
-    try:
-        checkin_db(bilhete_id)
-        return jsonify({"Message": "Check-in efetuado com sucesso."}), 200
-    except NotFoundError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 404
-    except ConflictError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 409
-    except ApiError as error:
-        return jsonify({"Erro": error.message, **error.extra}), 500
+    register_check_in(bilhete_id)
+    return jsonify({"Message": "Check-in efetuado com sucesso."}), 200
+
+@app.errorhandler(ApiError)
+def handle_api_error(e):
+    """Handle custom API errors."""
+    return jsonify({
+        "error": e.error,
+        "message": e.description,
+        "status": e.code
+    }), e.code
+
+@app.before_request
+def check_rate_limit():
+    """Enforce rate limit on api endpoints."""
+    ip = request.remote_addr
+    if is_rate_limited(ip):
+        abort(429, description="Too Many Requests")
 
 if __name__ == "__main__":
     app.run()
