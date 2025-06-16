@@ -235,41 +235,41 @@ def register_sale(flight_id, nif, tickets_data):
     """Buy tickets for a flight, ensuring availability before selling."""
     db_connection = get_db_connection()
     try:
-        with db_connection.cursor(row_factory=dict_row) as cursor:
+        with db_connection.transaction(),\
+            db_connection.cursor(row_factory=dict_row) as cursor:
             # Verify the flight exists
             cursor.execute("SELECT EXISTS(SELECT 1 FROM voo WHERE id = %s)",
                 (flight_id,))
             if not cursor.fetchone()["exists"]:
                 raise NotFoundError(f"Voo ({flight_id}) não encontrado.")
-            with db_connection.transaction():
-                cursor.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
-                    VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif,))
-                reservation_code = cursor.fetchone()["codigo_reserva"]
-                for ticket in tickets_data:
-                    if not isinstance(ticket, dict) or \
-                        "nome" not in ticket or \
-                        "prim_classe" not in ticket:
-                        raise BadRequestError("Dados de bilhete inválidos." \
-                        "É necessário fornecer o nome do passageiro e a" \
-                        "classe (prim_classe) do bilhete.")
-                    available = get_available_seats(cursor,
-                        flight_id, ticket["prim_classe"])
-                    if available == 0:
-                        raise ConflictError(
-                            f"Não há mais bilhetes de "
-                            f"{'primeira' 
-                            if str(ticket['prim_classe']).lower() == 'true'
-                            else 'segunda'} "
-                            f"classe disponíveis para o voo {flight_id}."
-                        )
-                    price_row = get_ticket_price(cursor, flight_id,
-                        ticket["prim_classe"])
-                    cursor.execute(
-                        """INSERT INTO bilhete (voo_id, codigo_reserva,
-                        nome_passegeiro, preco, prim_classe, lugar, no_serie)
-                        VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
-                        (flight_id, reservation_code, ticket["nome"],
-                            price_row, ticket["prim_classe"]))
+            cursor.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
+                VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif,))
+            reservation_code = cursor.fetchone()["codigo_reserva"]
+            for ticket in tickets_data:
+                if not isinstance(ticket, dict) or \
+                    "nome" not in ticket or \
+                    "prim_classe" not in ticket:
+                    raise BadRequestError("Dados de bilhete inválidos." \
+                    "É necessário fornecer o nome do passageiro e a" \
+                    "classe (prim_classe) do bilhete.")
+                available = get_available_seats(cursor,
+                    flight_id, ticket["prim_classe"])
+                if available == 0:
+                    raise ConflictError(
+                        f"Não há mais bilhetes de "
+                        f"{'primeira' 
+                        if str(ticket['prim_classe']).lower() == 'true'
+                        else 'segunda'} "
+                        f"classe disponíveis para o voo {flight_id}."
+                    )
+                price_row = get_ticket_price(cursor, flight_id,
+                    ticket["prim_classe"])
+                cursor.execute(
+                    """INSERT INTO bilhete (voo_id, codigo_reserva,
+                    nome_passegeiro, preco, prim_classe, lugar, no_serie)
+                    VALUES (%s, %s, %s, %s, %s, NULL, NULL)""",
+                    (flight_id, reservation_code, ticket["nome"],
+                        price_row, ticket["prim_classe"]))
     except ApiError:
         db_connection.rollback()
         raise
@@ -283,38 +283,38 @@ def register_check_in(bilhete_id):
     """Checks in the passenger, assigns a seat to the ticket in the correct class."""
     db_connection = get_db_connection()
     try:
-        with db_connection.transaction():
-            with db_connection.cursor(row_factory=dict_row) as db_query:
-                db_query.execute("""SELECT voo_id, prim_classe, lugar, no_serie
-                    FROM bilhete WHERE id = %s
-                    FOR UPDATE NOWAIT""", (bilhete_id,))
-                bilhete = db_query.fetchone()
-                if not bilhete:
-                    raise NotFoundError(f"Bilhete não encontrado "
-                        f"Bilhete ID: {bilhete_id}.")
-                # Check if passenger has already checked in
-                if bilhete["lugar"] is not None and bilhete["no_serie"] is not None:
-                    raise ConflictError(
-                        f"Check-in já realizado para este bilhete. "
-                        f"Bilhete ID: {bilhete_id}.")
-                db_query.execute("SELECT no_serie FROM voo WHERE id = %s",
-                    (bilhete["voo_id"],))
-                voo = db_query.fetchone()
-                if not voo:
-                    raise NotFoundError(f"Voo {bilhete['voo_id']} não encontrado")
-                db_query.execute("""SELECT lugar FROM assento WHERE
-                    no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
-                    NOT IN (SELECT lugar FROM bilhete
-                    WHERE voo_id = %s) FOR UPDATE SKIP LOCKED LIMIT 1""",
-                    (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
-                assento = db_query.fetchone()
-                if not assento:
-                    raise ConflictError(
-                        f"Não há assentos disponíveis para esta classe. Voo ID: "
-                        f"{bilhete['voo_id']}, Primeira Classe: {bilhete['prim_classe']}.")
-                db_query.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
-                    WHERE id = %s""",
-                    (assento["lugar"], voo["no_serie"], bilhete_id))
+        with db_connection.transaction(),\
+            db_connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("""SELECT voo_id, prim_classe, lugar, no_serie
+                FROM bilhete WHERE id = %s
+                FOR UPDATE NOWAIT""", (bilhete_id,))
+            bilhete = cursor.fetchone()
+            if not bilhete:
+                raise NotFoundError(f"Bilhete não encontrado "
+                    f"Bilhete ID: {bilhete_id}.")
+            # Check if passenger has already checked in
+            if bilhete["lugar"] is not None and bilhete["no_serie"] is not None:
+                raise ConflictError(
+                    f"Check-in já realizado para este bilhete. "
+                    f"Bilhete ID: {bilhete_id}.")
+            cursor.execute("SELECT no_serie FROM voo WHERE id = %s",
+                (bilhete["voo_id"],))
+            voo = cursor.fetchone()
+            if not voo:
+                raise NotFoundError(f"Voo {bilhete['voo_id']} não encontrado")
+            cursor.execute("""SELECT lugar FROM assento WHERE
+                no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
+                NOT IN (SELECT lugar FROM bilhete
+                WHERE voo_id = %s) FOR UPDATE SKIP LOCKED LIMIT 1""",
+                (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
+            assento = cursor.fetchone()
+            if not assento:
+                raise ConflictError(
+                    f"Não há assentos disponíveis para esta classe. Voo ID: "
+                    f"{bilhete['voo_id']}, Primeira Classe: {bilhete['prim_classe']}.")
+            cursor.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
+                WHERE id = %s""",
+                (assento["lugar"], voo["no_serie"], bilhete_id))
     except ApiError:
         db_connection.rollback()
         raise
