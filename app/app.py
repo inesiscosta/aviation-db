@@ -131,11 +131,13 @@ def get_data_next_departure_flights(departure_airport):
             if not airport_exists(cursor, departure_airport):
                 raise NotFoundError(f"""Aeroporto de partida ({departure_airport})
                     não encontrado.""")
+
             cursor.execute("""SELECT no_serie, hora_partida, chegada FROM voo
                 WHERE partida = %s AND hora_partida
                 BETWEEN NOW() AND NOW() + INTERVAL '12 hours'""",
                 (departure_airport,))
             data = cursor.fetchall()
+
             if not data:
                 raise NotFoundError(f"""Nenhum voo encontrado para o aeroporto
                     {departure_airport} nas próximas 12 horas.""")
@@ -154,9 +156,11 @@ def get_available_flights(departure_airport, arrival_airport):
             if not airport_exists(cursor, departure_airport):
                 raise NotFoundError(f"Aeroporto de partida "
                     f"({departure_airport}) não encontrado.")
+
             if not airport_exists(cursor, arrival_airport):
                 raise NotFoundError(f"Aeroporto de chegada "
                     f"({arrival_airport}) não encontrado.")
+
             # a = assentos por avião, b = bilhetes por voo
             cursor.execute("""
                 SELECT v.no_serie, v.hora_partida
@@ -179,6 +183,7 @@ def get_available_flights(departure_airport, arrival_airport):
                 LIMIT 3
             """, (departure_airport, arrival_airport))
             data = cursor.fetchall()
+
             if not data:
                 raise NotFoundError(f"Nenhum voo com lugares disponíveis "
                     f"encontrado para a rota desejada. "
@@ -237,7 +242,7 @@ def register_sale(flight_id, nif, tickets_data):
     try:
         with db_connection.transaction(),\
             db_connection.cursor(row_factory=dict_row) as cursor:
-            # Verify the flight exists
+
             cursor.execute("SELECT EXISTS(SELECT 1 FROM voo WHERE id = %s)",
                 (flight_id,))
             if not cursor.fetchone()["exists"]:
@@ -245,6 +250,7 @@ def register_sale(flight_id, nif, tickets_data):
             cursor.execute("""INSERT INTO venda (nif_cliente, balcao, hora)
                 VALUES (%s, NULL, NOW()) RETURNING codigo_reserva""", (nif,))
             reservation_code = cursor.fetchone()["codigo_reserva"]
+
             for ticket in tickets_data:
                 if not isinstance(ticket, dict) or \
                     "nome" not in ticket or \
@@ -252,6 +258,7 @@ def register_sale(flight_id, nif, tickets_data):
                     raise BadRequestError("Dados de bilhete inválidos." \
                     "É necessário fornecer o nome do passageiro e a" \
                     "classe (prim_classe) do bilhete.")
+
                 available = get_available_seats(cursor,
                     flight_id, ticket["prim_classe"])
                 if available == 0:
@@ -262,8 +269,10 @@ def register_sale(flight_id, nif, tickets_data):
                         else 'segunda'} "
                         f"classe disponíveis para o voo {flight_id}."
                     )
+
                 price_row = get_ticket_price(cursor, flight_id,
                     ticket["prim_classe"])
+
                 cursor.execute(
                     """INSERT INTO bilhete (voo_id, codigo_reserva,
                     nome_passegeiro, preco, prim_classe, lugar, no_serie)
@@ -292,26 +301,30 @@ def register_check_in(bilhete_id):
             if not bilhete:
                 raise NotFoundError(f"Bilhete não encontrado "
                     f"Bilhete ID: {bilhete_id}.")
-            # Check if passenger has already checked in
+
             if bilhete["lugar"] is not None and bilhete["no_serie"] is not None:
                 raise ConflictError(
                     f"Check-in já realizado para este bilhete. "
                     f"Bilhete ID: {bilhete_id}.")
+
             cursor.execute("SELECT no_serie FROM voo WHERE id = %s",
                 (bilhete["voo_id"],))
             voo = cursor.fetchone()
             if not voo:
                 raise NotFoundError(f"Voo {bilhete['voo_id']} não encontrado")
+
             cursor.execute("""SELECT lugar FROM assento WHERE
                 no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
                 NOT IN (SELECT lugar FROM bilhete
                 WHERE voo_id = %s) FOR UPDATE SKIP LOCKED LIMIT 1""",
                 (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
             assento = cursor.fetchone()
+
             if not assento:
                 raise ConflictError(
                     f"Não há assentos disponíveis para esta classe. Voo ID: "
                     f"{bilhete['voo_id']}, Primeira Classe: {bilhete['prim_classe']}.")
+
             cursor.execute("""UPDATE bilhete SET lugar = %s, no_serie = %s
                 WHERE id = %s""",
                 (assento["lugar"], voo["no_serie"], bilhete_id))
