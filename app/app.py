@@ -64,7 +64,7 @@ class ApiError(Exception):
     def __init__(self, code, message, error = None):
         super().__init__(message)
         self.error = error
-        self.code = code if code else 500
+        self.code = code
         self.description = message or {}
 
 # Speciallization of API Exception
@@ -112,7 +112,7 @@ def get_data_all_airports():
             cursor.execute("SELECT nome, cidade FROM aeroporto")
             return cursor.fetchall()
     except psycopg.Error as e:
-        raise ApiError("Erro ao listar todos os aeroportos.",
+        raise ApiError(500, "Erro ao listar todos os aeroportos.",
             {"detalhes": str(e)}) from e
     finally:
         put_db_connection(db_connection)
@@ -143,7 +143,7 @@ def get_data_next_departure_flights(departure_airport):
                     {departure_airport} nas próximas 12 horas.""")
             return data
     except psycopg.Error as error:
-        raise ApiError("Erro ao obter os voos que partem nas próximas 12 horas.",
+        raise ApiError(500, "Erro ao obter os voos que partem nas próximas 12 horas.",
             {"detalhes": str(error)}) from error
     finally:
         put_db_connection(db_connection)
@@ -190,7 +190,7 @@ def get_available_flights(departure_airport, arrival_airport):
                     f"Origem: {departure_airport}, Destino: {arrival_airport}.")
             return data
     except psycopg.Error as error:
-        raise ApiError("Erro ao obter os voos disponíveis.",
+        raise ApiError(500, "Erro ao obter os voos disponíveis.",
             {"detalhes": str(error)}) from error
     finally:
         put_db_connection(db_connection)
@@ -282,9 +282,9 @@ def register_sale(flight_id, nif, tickets_data):
     except ApiError:
         db_connection.rollback()
         raise
-    except (psycopg.Error, Exception) as e:
+    except Exception as e:
         db_connection.rollback()
-        raise ApiError("Erro ao comprar bilhetes.", {"detalhes": str(e)}) from e
+        raise ApiError(500, "Erro ao comprar bilhetes.", {"detalhes": str(e)}) from e
     finally:
         put_db_connection(db_connection)
 
@@ -313,11 +313,16 @@ def register_check_in(bilhete_id):
             if not voo:
                 raise NotFoundError(f"Voo {bilhete['voo_id']} não encontrado")
 
-            cursor.execute("""SELECT lugar FROM assento WHERE
-                no_serie = %s AND prim_classe = %s AND (lugar, no_serie)
-                NOT IN (SELECT lugar FROM bilhete
-                WHERE voo_id = %s) FOR UPDATE SKIP LOCKED LIMIT 1""",
-                (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
+            cursor.execute("""
+                SELECT lugar FROM assento
+                WHERE no_serie = %s AND prim_classe = %s
+                AND lugar NOT IN (
+                    SELECT lugar FROM bilhete
+                    WHERE voo_id = %s AND lugar IS NOT NULL
+                )
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            """, (voo["no_serie"], bilhete["prim_classe"], bilhete["voo_id"]))
             assento = cursor.fetchone()
 
             if not assento:
@@ -333,7 +338,7 @@ def register_check_in(bilhete_id):
         raise
     except Exception as e:
         db_connection.rollback()
-        raise ApiError("Erro ao fazer check-in.", {"detalhes": str(e)}) from e
+        raise ApiError(500, "Erro ao fazer check-in.", {"detalhes": str(e)}) from e
     finally:
         put_db_connection(db_connection)
 
