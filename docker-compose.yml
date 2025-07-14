@@ -5,35 +5,24 @@ volumes:
   pgadmin_data: {}
   redis_data: {}
 
+name: "bd-ist"
+
 services:
   notebook:
     restart: unless-stopped
     image: ghcr.io/bdist/notebook:2025-02-18
     volumes:
-      - ../app:/home/jovyan/app
-      - ./data:/home/jovyan/data
-      - ./images:/home/jovyan/images
-      - ./work:/home/jovyan/work
+      - ./app:/home/jovyan/app
+      - ./notebooks:/home/jovyan/notebooks
+      - ./container-init/aviacao.sql:/home/jovyan/data/aviacao.sql:ro
     environment:
       - JUPYTER_PORT=9999
+      - JUPYTER_PASSWORD=${JUPYTER_PASSWORD}
     ports:
       - 9999:9999
+    command: "start-notebook.sh --NotebookApp.token='${JUPYTER_PASSWORD}'"
     networks:
-      - bdist-workspace-network
-  redis:
-    restart: unless-stopped
-    image: redis:7.2
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-    ports:
-      - 6379:6379
-    volumes:
-      - redis_data:/data
-    networks:
-      - bdist-workspace-network
-
+      - network
   postgres:
     restart: unless-stopped
     image: postgres:17
@@ -54,7 +43,9 @@ services:
     shm_size: "256m"
     volumes:
       - pg_data:/var/lib/postgresql/data:Z
-      - ./docker-entrypoint-initdb.d/:/docker-entrypoint-initdb.d/
+      - ./container-init/stat_extension.sql:/docker-entrypoint-initdb.d/stat_extension.sql:ro
+      - ./container-init/create-app-db.sql:/docker-entrypoint-initdb.d/create-app-db.sql:ro
+      - ./container-init/aviacao.sql:/docker-entrypoint-initdb.d/aviacao.sql:ro
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -62,33 +53,17 @@ services:
     ports:
       - 5432:5432
     networks:
-      - bdist-workspace-network
-
-  pgadmin:
-    restart: unless-stopped
-    depends_on:
-      - postgres
-    image: dpage/pgadmin4:8
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    environment:
-      PGADMIN_DEFAULT_EMAIL: pgadmin@tecnico.pt
-      PGADMIN_DEFAULT_PASSWORD: pgadmin
-      PGADMIN_LISTEN_PORT: 5050
-    ports:
-      - 5050:5050
-    networks:
-      - bdist-workspace-network
+      - network
 
   app:
     restart: unless-stopped
     depends_on:
       - postgres
     build:
-      context: ../app
+      context: ./app
       dockerfile: Dockerfile.development
     volumes:
-      - ../app:/app
+      - ./app:/app
     environment:
       FLASK_APP: app
       FLASK_ENV: development
@@ -97,23 +72,8 @@ services:
     ports:
       - 8080:8080
     networks:
-      - bdist-workspace-network
-
-  ngrok:
-    restart: no
-    image: ngrok/ngrok
-    command:
-      - "start"
-      - "--all"
-      - "--config"
-      - "/etc/ngrok.yml"
-    volumes:
-      - ./ngrok.yml:/etc/ngrok.yml
-    ports:
-      - 4040:4040
-    networks:
-      - bdist-workspace-network
+      - network
 
 networks:
-  bdist-workspace-network:
+  network:
     driver: bridge

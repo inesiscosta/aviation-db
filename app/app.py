@@ -43,7 +43,7 @@ log = app.logger
 # In this case we don't have the env variable defined, so the default
 # connection string is used.
 DATABASE_URL = os.environ.get("DATABASE_URL",
-    "postgres://postgres:postgres@postgres/aviacao")
+    "postgres://flaskapp:flask_app@postgres/aviacao")
 
 # Setup DB connection
 db_pool = psycopg_pool.ConnectionPool(
@@ -163,7 +163,7 @@ def get_available_flights(departure_airport, arrival_airport):
 
             # a = assentos por avião, b = bilhetes por voo
             cursor.execute("""
-                SELECT v.no_serie, v.hora_partida
+                SELECT v.id, v.no_serie, v.hora_partida
                 FROM voo v
                 JOIN (
                     SELECT no_serie, COUNT(*) AS total_assentos
