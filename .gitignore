@@ -159,3 +159,6 @@ cython_debug/
 
 # macOS
 .DS_Store
+
+# Compiled data generator
+data/generate_data
