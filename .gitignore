@@ -162,3 +162,5 @@ cython_debug/
 
 # Compiled data generator
 data/generate_data
+data/populate.sql
+populate.sql

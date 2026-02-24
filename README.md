@@ -22,7 +22,15 @@ The included notebooks demonstrate queries, constraints, and indexes implemented
 
 ## Data Generation
 
-The `data/generate_data.c` program generates a SQL file (`populate.sql`) containing synthetic aviation data. You can use this file to populate the database with realistic test data by either:
+The `data/generate_data.c` program generates a SQL file (`populate.sql`) containing synthetic aviation data. The file is about 650 MB, so it isn't committed. Generate it with:
+
+```sh
+cd data
+cc -O2 -o generate_data generate_data.c -lm
+./generate_data   # writes populate.sql
+```
+
+You can use this file to populate the database with realistic test data by either:
 
 - Placing `populate.sql` in the `docker-entrypoint-initdb.d/` directory (for automatic import), or
 - Importing it manually into your PostgreSQL instance.

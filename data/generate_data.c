@@ -237,8 +237,8 @@ int main() {
     Ticket* tickets = malloc(MAX_TICKETS * sizeof(Ticket));
     int tickets_count = 0;
     srand((unsigned int)time(NULL));
-    FILE* sql_file = fopen("populate1.sql", "w");
-    if (!sql_file) { perror("open populate1.sql"); return 1; }
+    FILE* sql_file = fopen("populate.sql", "w");
+    if (!sql_file) { perror("open populate.sql"); return 1; }
 
     // --- Generate Airports ---
     for (int i = 0; i < airports_count; ++i) {
