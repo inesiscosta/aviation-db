@@ -45,7 +45,7 @@ services:
       - pg_data:/var/lib/postgresql/data:Z
       - ./container-init/stat_extension.sql:/docker-entrypoint-initdb.d/stat_extension.sql:ro
       - ./container-init/create-app-db.sql:/docker-entrypoint-initdb.d/create-app-db.sql:ro
-      - ./container-init/aviacao.sql:/docker-entrypoint-initdb.d/aviacao.sql:ro
+      - ./container-init/aviacao.sql:/schema/aviacao.sql:ro
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
