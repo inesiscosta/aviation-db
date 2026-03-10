@@ -6,6 +6,7 @@ ticket purchase, and check-in operations.
 from logging.config import dictConfig
 import re
 import time
+from decimal import Decimal
 import random
 import os
 from flask import Flask, jsonify, request, abort
@@ -129,8 +130,8 @@ def get_data_next_departure_flights(departure_airport):
     try:
         with db_connection.cursor(row_factory=dict_row) as cursor:
             if not airport_exists(cursor, departure_airport):
-                raise NotFoundError(f"""Aeroporto de partida ({departure_airport})
-                    não encontrado.""")
+                raise NotFoundError(
+                    f"Aeroporto de partida ({departure_airport}) não encontrado.")
 
             cursor.execute("""SELECT no_serie, hora_partida, chegada FROM voo
                 WHERE partida = %s AND hora_partida
@@ -139,8 +140,9 @@ def get_data_next_departure_flights(departure_airport):
             data = cursor.fetchall()
 
             if not data:
-                raise NotFoundError(f"""Nenhum voo encontrado para o aeroporto
-                    {departure_airport} nas próximas 12 horas.""")
+                raise NotFoundError((
+                    f"Nenhum voo encontrado para o aeroporto {departure_airport} "
+                    "nas próximas 12 horas."))
             return data
     except psycopg.Error as error:
         raise ApiError(500, "Erro ao obter os voos que partem nas próximas 12 horas.",
@@ -197,16 +199,16 @@ def get_available_flights(departure_airport, arrival_airport):
 
 def get_available_seats(cursor, flight_id, prim_classe):
     """Returns the number of available seats for a given flight and class."""
+    # Seats of this class on the flight's plane minus tickets of this class
+    # already sold for the flight (seats are only assigned at check-in).
     cursor.execute("""
-        SELECT COUNT(*) AS no_assentos
-        FROM assento
-        WHERE no_serie = (SELECT no_serie FROM voo WHERE id = %s)
-        AND prim_classe = %s
-        AND lugar NOT IN (
-            SELECT lugar FROM bilhete
-            WHERE voo_id = %s
-        )
-    """, (flight_id, prim_classe, flight_id))
+        SELECT
+            (SELECT COUNT(*) FROM assento
+             WHERE no_serie = (SELECT no_serie FROM voo WHERE id = %s)
+             AND prim_classe = %s)
+          - (SELECT COUNT(*) FROM bilhete
+             WHERE voo_id = %s AND prim_classe = %s) AS no_assentos
+    """, (flight_id, prim_classe, flight_id, prim_classe))
     return cursor.fetchone()["no_assentos"]
 
 def get_ticket_price(cursor, flight_id, prim_classe):
@@ -234,7 +236,8 @@ def get_ticket_price(cursor, flight_id, prim_classe):
     # If a price is found, adjust it based on the class
     # 40% more for first class, 40% less for second class
     alt_price = row["preco"]
-    return round(alt_price * 1.4, 2) if prim_classe else round(alt_price * 0.6, 2)
+    factor = Decimal("1.4") if prim_classe else Decimal("0.6")
+    return (alt_price * factor).quantize(Decimal("0.01"))
 
 def register_sale(flight_id, nif, tickets_data):
     """Buy tickets for a flight, ensuring availability before selling."""
